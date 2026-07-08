@@ -544,6 +544,33 @@ function getConfig(key) {
 	return configCache[key]
 }
 
+function getSelectedText() {
+	const activeElement = document.activeElement
+
+	if (activeElement) {
+		const tagName = activeElement.tagName
+		const inputType = (activeElement.type || 'text').toLowerCase()
+		const canReadSelection =
+			tagName === 'TEXTAREA' || (tagName === 'INPUT' && ['text', 'search', 'url', 'email', 'tel'].includes(inputType))
+
+		if (canReadSelection && typeof activeElement.selectionStart === 'number' && typeof activeElement.selectionEnd === 'number') {
+			return activeElement.value.slice(activeElement.selectionStart, activeElement.selectionEnd).trim()
+		}
+	}
+
+	return window.getSelection()?.toString().trim() || ''
+}
+
+function detectOfflineLink(text) {
+	if (/^magnet:\?xt=urn:[a-z0-9]+:[a-z0-9]{32,}/i.test(text)) {
+		return { url: text, type: 'Magnet' }
+	}
+	if (/^ed2k:\/\/\|file\|/i.test(text)) {
+		return { url: text, type: 'ED2K' }
+	}
+	return null
+}
+
 function getRootLabel() {
 	return t('root_path_name')
 }
@@ -882,30 +909,12 @@ async function init() {
 		}
 	})
 
-	// Copy event listener - detect magnet/ed2k links in clipboard
+	// Copy event listener - detect magnet/ed2k links from the current selection
 	document.addEventListener('copy', () => {
-		setTimeout(async () => {
-			try {
-				const text = await navigator.clipboard.readText()
-				const trimmed = text.trim()
-				if (/^magnet:\?xt=urn:[a-z0-9]+:[a-z0-9]{32,}/i.test(trimmed)) {
-					createConfirmModal(trimmed, 'Magnet')
-				} else if (/^ed2k:\/\/\|file\|/i.test(trimmed)) {
-					createConfirmModal(trimmed, 'ED2K')
-				}
-			} catch (e) {
-				// Clipboard API failed, try selection
-				const selection = window.getSelection()
-				if (selection) {
-					const text = selection.toString().trim()
-					if (/^magnet:\?xt=urn:[a-z0-9]+:[a-z0-9]{32,}/i.test(text)) {
-						createConfirmModal(text, 'Magnet')
-					} else if (/^ed2k:\/\/\|file\|/i.test(text)) {
-						createConfirmModal(text, 'ED2K')
-					}
-				}
-			}
-		}, 100)
+		if (!getConfig(CONFIG_KEYS.AUTO_DETECT)) return
+
+		const link = detectOfflineLink(getSelectedText())
+		if (link) createConfirmModal(link.url, link.type)
 	})
 
 	// Listen for config changes
