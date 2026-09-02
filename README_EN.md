@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">
-  <img src="extension/icons/logo.png" width="64" height="64" alt="logo"><br>
+  <img src="src/chrome-extension/icons/logo.png" width="64" height="64" alt="logo"><br>
   115 Offline Helper
 </h1>
 
@@ -38,6 +38,25 @@ Install directly from the Chrome Web Store:
 
 [<img src="https://storage.googleapis.com/web-dev-uploads/image/WlD8wC6g8khYWPJUsQceQkhXSlv1/iNEddTyWiMfLSwFD6qGq.png" height="58" alt="Available in the Chrome Web Store">](https://chromewebstore.google.com/detail/115-offline-helper/blgnjjjbmjgilkiimglodjdebcdaidgl?hl=zh-CN&authuser=0)
 
+### Build and deploy from source with Pixi
+
+On Windows, install [pixi](https://pixi.sh/) and Chrome. From the repository root:
+
+```powershell
+Copy-Item config.example.toml config.toml
+```
+
+Set the local `chrome.exe` path in `[browser] chrome`, then run:
+
+```powershell
+pixi install
+pixi run deploy
+```
+
+The deploy task validates the extension, copies it to `dist/extension`, opens `chrome://extensions/`, and asks Chrome to load the compiled directory. If an already-running Chrome ignores the launch argument, enable **Developer mode**, click **Load unpacked**, and choose `dist/extension` once.
+
+After source changes, run `pixi run deploy` again and click **Reload** on the extension card.
+
 ### Manual Install
 
 1. **Download the extension**
@@ -63,7 +82,7 @@ Install directly from the Chrome Web Store:
 
 4. **Load the extension**
 
-   Click **Load unpacked** and select the `extension` folder from the project.
+   Click **Load unpacked**. For a source checkout, run `pixi run build` first and select `dist/extension`; for a release archive, select the extracted extension directory.
 
 5. **Done!**
 
@@ -100,6 +119,17 @@ Install directly from the Chrome Web Store:
 
 **Q: Auto-detect not working?**
 > Enable "Auto detect links" in Settings. The browser will ask for additional permissions — click Allow.
+
+## 🛠️ Development commands
+
+```powershell
+pixi install
+pixi run build    # Validate and generate dist/extension
+pixi run deploy   # Build and open the Chrome extensions page
+pixi run clean    # Remove build output
+```
+
+See [`src/README.md`](src/README.md) for the source layout. The local `config.toml` only stores the Chrome path and is ignored by Git.
 
 ## 🔒 Privacy
 

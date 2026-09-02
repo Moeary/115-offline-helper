@@ -1,19 +1,19 @@
 # 115 Offline Helper - Browser Extension
 
-This directory contains the source code for the Chrome Extension version of the 115 Offline Helper.
+This directory contains the source code for the Chrome Extension version of the 115 Offline Helper. The Chrome-loadable build is generated at `dist/extension` by Pixi.
 
 ## Installation
 
 1.  Open Chrome/Edge and navigate to `chrome://extensions`.
 2.  Enable **Developer mode** (toggle in the top right).
 3.  Click **Load unpacked**.
-4.  Select the `extension` folder in this project.
+4.  Select the `dist/extension` folder in this project. Run `pixi run build` first if it does not exist.
 
 ## Development
 
 -   **background.js**: Service worker, handles cross-origin requests to 115.com and notifications.
 -   **content.js**: Main logic, injects the UI panel into pages.
--   **styles.css**: Styles for the UI panel.
+-   **popup.css**: Styles for the popup UI.
 -   **manifest.json**: Extension configuration.
 
 ## Features

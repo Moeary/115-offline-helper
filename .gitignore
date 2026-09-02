@@ -1,0 +1,14 @@
+# Pixi and build output
+.pixi/
+.build/
+dist/
+config.toml
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Local/editor files
+*.user
+*.suo
+*.log

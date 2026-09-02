@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">
-  <img src="extension/icons/logo.png" width="64" height="64" alt="logo"><br>
+  <img src="src/chrome-extension/icons/logo.png" width="64" height="64" alt="logo"><br>
   115 离线助手
 </h1>
 
@@ -38,6 +38,25 @@
 
 [<img src="https://fonts.gstatic.com/s/i/productlogos/chrome_store/v7/192px.svg" height="58" alt="前往 Chrome 应用商店">](https://chromewebstore.google.com/detail/115-offline-helper/blgnjjjbmjgilkiimglodjdebcdaidgl?hl=zh-CN&authuser=0)
 
+### 从源码用 Pixi 构建与部署
+
+需要 Windows、Chrome 和 [pixi](https://pixi.sh/)。在仓库根目录执行：
+
+```powershell
+Copy-Item config.example.toml config.toml
+```
+
+在 `config.toml` 的 `[browser] chrome` 中填写本机 `chrome.exe` 路径，然后执行：
+
+```powershell
+pixi install
+pixi run deploy
+```
+
+`pixi run deploy` 会校验扩展并将源码复制到 `dist/extension`，随后打开 `chrome://extensions/`，同时请求 Chrome 加载该编译目录。若 Chrome 已经运行而忽略了启动参数，首次安装时在扩展页开启“开发者模式”，点击“加载已解压的扩展”，选择仓库中的 `dist/extension`。
+
+以后修改源码后再次执行 `pixi run deploy`，再点击扩展卡片上的“重新加载”即可。
+
 ### 手动安装
 
 1. **下载扩展**
@@ -63,7 +82,7 @@
 
 4. **加载扩展**
 
-   点击 **加载已解压的扩展程序**，选择项目中的 `extension` 文件夹。
+   点击 **加载已解压的扩展程序**。源码方式请先运行 `pixi run build`，然后选择项目中的 `dist/extension` 文件夹；Release 压缩包则选择解压后的扩展目录。
 
 5. **完成！**
 
@@ -100,6 +119,17 @@
 
 **Q: 自动检测不生效？**
 > 确保在设置中开启了"自动检测链接"。浏览器会请求额外权限，请点击允许。
+
+## 🛠️ 开发命令
+
+```powershell
+pixi install
+pixi run build    # 校验并生成 dist/extension
+pixi run deploy   # 构建并打开 Chrome 扩展管理页
+pixi run clean    # 清理构建产物
+```
+
+源码说明见 [`src/README.md`](src/README.md)。本机的 `config.toml` 只保存 Chrome 路径，已被 Git 忽略。
 
 ## 🔒 隐私
 

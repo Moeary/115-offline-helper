@@ -1,0 +1,5 @@
+# Copy this file to config.toml and fill in the path for this computer.
+
+[browser]
+# Chrome executable used by `pixi run deploy`.
+chrome = "C:/Program Files/Google/Chrome/Application/chrome.exe"

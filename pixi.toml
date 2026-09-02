@@ -1,0 +1,12 @@
+[workspace]
+name = "115-offline-helper"
+channels = ["conda-forge"]
+platforms = ["win-64"]
+
+[dependencies]
+python = ">=3.12,<3.13"
+
+[tasks]
+build = "python scripts/build.py"
+deploy = "python scripts/deploy.py"
+clean = "python scripts/clean.py"
