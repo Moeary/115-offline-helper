@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.0.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.0.1-orange" alt="Version">
 </p>
 
 ---
@@ -25,8 +25,10 @@
 - 📋 **Clipboard support** — Paste links directly in the popup to push
 - 📥 **One-click push** — Push links to 115.com offline download queue instantly
 - 📁 **Custom save directory** — Choose which 115 folder to save downloads to
-- 🗑️ **Auto-delete small files** — Remove files under a specified size (e.g., ads)
+- 🗑️ **Safe junk cleanup** — Remove obvious HTML/TXT attachments and small ad videos; subtitles are protected and image/NFO cleanup is off by default
 - 📂 **Auto-organize videos** — Move video files into folders based on filename
+- 🧰 **Full settings and logs page** — Manage extension rules, cleanup switches, directories, and background logs
+- 🔄 **In-popup task manager** — Open background task status, logs, refresh, and retry directly from the Home tab
 - 📱 **QR code login** — Log into 115.com directly from the extension popup
 - 🌐 **Bilingual UI** — Supports both Chinese and English
 
@@ -106,8 +108,15 @@ After source changes, run `pixi run deploy` again and click **Reload** on the ex
 |---------|-------------|
 | Save directory list | Add folders in `Name:CID` format, one per line |
 | Auto-detect links | Detect links on all pages via content script |
-| Auto-delete small files | Remove files smaller than specified MB |
+| Background task manager | Open the Task manager tab from Home to inspect logs and retry failures |
+| Junk extension rules | Edit junk, protected, and optional cleanup extensions in the full settings page |
+| Image/NFO cleanup | Off by default; enable it explicitly in the full settings page |
+| Safe junk cleanup | Explicit junk extensions are removed; small videos still pass safety checks |
 | Auto-organize videos | Move video files into named folders |
+
+> By default, `.url/.html/.htm/.txt/.exe/.bat/.cmd/.torrent` are treated as explicit junk, while `.srt/.ass/.ssa/.sup/.vtt` are protected. Image/poster and `.nfo` cleanup is disabled by default. If an extension appears in both lists, the protected list wins.
+
+> Click **Open full settings & logs** in the popup Settings tab to edit these rules and inspect recent task logs.
 
 ## ❓ FAQ
 

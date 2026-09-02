@@ -238,6 +238,266 @@ body {
   color: #0066cc;
 }
 
+/* Persistent background tasks */
+.push115-task-section {
+  margin-top: 2px;
+}
+
+.push115-task-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.push115-task-heading .push115-label {
+  margin-bottom: 6px;
+}
+
+.push115-task-manage-btn {
+  margin-bottom: 6px;
+  padding: 3px 8px;
+  border: 1px solid rgba(0, 122, 255, 0.25);
+  border-radius: 6px;
+  background: rgba(0, 122, 255, 0.08);
+  color: #007AFF;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.push115-task-manage-btn:hover {
+  background: rgba(0, 122, 255, 0.14);
+}
+
+.push115-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.push115-task-item {
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.push115-task-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.push115-task-top strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.push115-task-status {
+  flex: 0 0 auto;
+  color: #007AFF;
+  font-size: 11px;
+}
+
+.push115-task-message,
+.push115-task-empty {
+  margin-top: 3px;
+  color: #86868b;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.push115-task-retry {
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(0, 122, 255, 0.1);
+  color: #007AFF;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.push115-task-item.failed .push115-task-status {
+  color: #d70015;
+}
+
+.push115-task-item.completed .push115-task-status {
+  color: #248a3d;
+}
+
+body.dark-theme .push115-task-item {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #333;
+}
+
+/* In-popup background task manager */
+.push115-task-manager-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.push115-task-manager-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1d1d1f;
+}
+
+.push115-task-manager-header .push115-btn {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.push115-task-manager-summary {
+  margin-bottom: 8px;
+  color: #86868b;
+  font-size: 11px;
+}
+
+.push115-task-manager-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.push115-task-manager-item {
+  padding: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 9px;
+  background: #fafafa;
+}
+
+.push115-task-manager-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.push115-task-manager-top strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.push115-task-manager-status {
+  flex: 0 0 auto;
+  color: #007AFF;
+  font-size: 11px;
+}
+
+.push115-task-manager-item.failed .push115-task-manager-status {
+  color: #d70015;
+}
+
+.push115-task-manager-item.completed .push115-task-manager-status {
+  color: #248a3d;
+}
+
+.push115-task-manager-meta {
+  margin-top: 5px;
+  color: #86868b;
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.push115-task-manager-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.push115-task-manager-actions .push115-task-retry {
+  margin-top: 7px;
+}
+
+.push115-task-logs {
+  margin-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  padding-top: 7px;
+}
+
+.push115-task-logs summary {
+  color: #5f6368;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.push115-task-log-entry {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 6px;
+  margin-top: 5px;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.push115-task-log-entry time {
+  color: #9a9da2;
+  font-variant-numeric: tabular-nums;
+}
+
+.push115-task-log-entry span {
+  color: #5f6368;
+  overflow-wrap: anywhere;
+}
+
+.push115-task-manager-empty {
+  padding: 28px 10px;
+  border: 1px dashed rgba(0, 0, 0, 0.14);
+  border-radius: 9px;
+  color: #86868b;
+  font-size: 12px;
+  text-align: center;
+}
+
+body.dark-theme .push115-task-manage-btn {
+  border-color: rgba(10, 132, 255, 0.35);
+  background: rgba(10, 132, 255, 0.15);
+  color: #0A84FF;
+}
+
+body.dark-theme .push115-task-manager-title {
+  color: #e0e0e0;
+}
+
+body.dark-theme .push115-task-manager-summary,
+body.dark-theme .push115-task-manager-meta {
+  color: #888;
+}
+
+body.dark-theme .push115-task-manager-item {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #333;
+}
+
+body.dark-theme .push115-task-logs {
+  border-top-color: rgba(255, 255, 255, 0.1);
+}
+
+body.dark-theme .push115-task-logs summary,
+body.dark-theme .push115-task-log-entry span {
+  color: #aaa;
+}
+
+body.dark-theme .push115-task-log-entry time {
+  color: #777;
+}
+
+body.dark-theme .push115-task-manager-empty {
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #888;
+}
+
 /* Progress */
 .push115-progress {
   margin-bottom: 10px;

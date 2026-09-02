@@ -11,6 +11,11 @@ const CONFIG_KEYS = {
 	AUTO_DETECT: 'push115_auto_detect',
 	I18N_LOCALE: 'push115_i18n_locale',
 	THEME: 'push115_theme',
+	JUNK_EXTENSIONS: 'push115_junk_extensions',
+	PRESERVE_EXTENSIONS: 'push115_preserve_extensions',
+	CLEAN_EXTENSIONS: 'push115_clean_extensions',
+	CLEAN_IMAGES: 'push115_clean_images',
+	CLEAN_NFO: 'push115_clean_nfo',
 }
 
 const DEFAULT_CONFIG = {
@@ -23,6 +28,11 @@ const DEFAULT_CONFIG = {
 	[CONFIG_KEYS.AUTO_DETECT]: false,
 	[CONFIG_KEYS.I18N_LOCALE]: 'zh-CN',
 	[CONFIG_KEYS.THEME]: 'auto',
+	[CONFIG_KEYS.JUNK_EXTENSIONS]: '.url, .html, .htm, .txt, .exe, .bat, .cmd, .torrent',
+	[CONFIG_KEYS.PRESERVE_EXTENSIONS]: '.srt, .ass, .ssa, .sup, .vtt',
+	[CONFIG_KEYS.CLEAN_EXTENSIONS]: '',
+	[CONFIG_KEYS.CLEAN_IMAGES]: false,
+	[CONFIG_KEYS.CLEAN_NFO]: false,
 }
 
 const I18N_STRINGS = {
@@ -33,16 +43,33 @@ const I18N_STRINGS = {
 		save_path_label: '默认保存目录:',
 		cid_hint: '提示: 在“设置”页维护目录列表（每行：目录名:CID）',
 		root_path_name: '根目录',
-		auto_delete_label: '自动删除小文件',
-		delete_size_label_pre: '删除小于',
-		delete_size_label_post: 'MB的文件',
+		auto_delete_label: '安全清理广告文件',
+		delete_size_label_pre: '小视频候选 <',
+		delete_size_label_post: 'MB',
+		delete_safe_hint: '仅回收明确垃圾；字幕默认保护，图片/海报与 NFO 清理默认关闭，视频还会避开主视频和 CD1/CD2。',
 		auto_organize_label: '自动整理视频文件',
-		organize_hint: '自动将散落视频按文件名整理到对应文件夹',
+		organize_hint: '优先使用页面番号重命名任务文件夹、主视频和字幕',
 		check_login_text: '检查状态',
 		login_btn: '扫码登录',
 		login_success: '115账号已登录',
 		login_fail: '未登录，请先登录115',
 		processing: '处理中...',
+		background_tasks_label: '后台任务',
+		no_background_tasks: '暂无后台任务',
+		tab_tasks: '后台管理',
+		open_task_manager: '后台管理',
+		manage_tasks_hint: '查看任务状态、完整日志和失败重试。',
+		refresh_tasks: '刷新',
+		task_summary: '共 {count} 条任务记录',
+		task_logs: '处理日志',
+		open_options: '打开高级设置',
+		open_options_hint: '在完整设置页管理扩展名规则、清理开关和目录。',
+		task_status_waiting: '等待 115 任务',
+		task_status_processing: '处理中',
+		task_status_recorded: '已记录',
+		task_status_completed: '已完成',
+		task_status_failed: '失败',
+		task_retry: '重试',
 		settings_language_label: '语言 / Language',
 		settings_theme_label: '主题 / Theme',
 		theme_auto: '跟随系统',
@@ -61,16 +88,33 @@ const I18N_STRINGS = {
 		save_path_label: 'Default Save Directory:',
 		cid_hint: 'Tip: Maintain directory list in Settings, one per line: Name:CID',
 		root_path_name: 'Root',
-		auto_delete_label: 'Auto delete small files',
-		delete_size_label_pre: 'Delete files <',
+		auto_delete_label: 'Safe cleanup of junk files',
+		delete_size_label_pre: 'Small-video candidate <',
 		delete_size_label_post: 'MB',
+		delete_safe_hint: 'Only clear junk is removed; subtitles are protected, image/NFO cleanup is off by default, and the main video/CD1/CD2 are kept.',
 		auto_organize_label: 'Auto organize videos',
-		organize_hint: 'Automatically organize loose videos into matching folders by filename',
+		organize_hint: 'Prefer the page code to rename the task folder, main video, and subtitles',
 		check_login_text: 'Check Status',
 		login_btn: 'QR Login',
 		login_success: '115 is logged in',
 		login_fail: 'Not logged in, please login first',
 		processing: 'Processing...',
+		background_tasks_label: 'Background tasks',
+		no_background_tasks: 'No background tasks',
+		tab_tasks: 'Task manager',
+		open_task_manager: 'Task manager',
+		manage_tasks_hint: 'View task states, full logs, and retry failed tasks.',
+		refresh_tasks: 'Refresh',
+		task_summary: '{count} task records',
+		task_logs: 'Processing log',
+		open_options: 'Open advanced settings',
+		open_options_hint: 'Manage extension rules, cleanup switches, and directories in the full settings page.',
+		task_status_waiting: 'Waiting for 115',
+		task_status_processing: 'Processing',
+		task_status_recorded: 'Recorded',
+		task_status_completed: 'Completed',
+		task_status_failed: 'Failed',
+		task_retry: 'Retry',
 		settings_language_label: 'Language',
 		settings_theme_label: 'Theme',
 		theme_auto: 'System',
@@ -138,6 +182,189 @@ function showStatus(type, msg, timeout = 3000) {
 	}
 }
 
+function getTaskStatusLabel(status) {
+	const label = t(`task_status_${status}`)
+	return label === `task_status_${status}` ? status : label
+}
+
+function getTaskDisplayName(task) {
+	return task.code || task.remoteName || task.title || '115 task'
+}
+
+function replaceTaskCount(text, count) {
+	return String(text || '').replace('{count}', String(count))
+}
+
+function getSortedTasks(tasks) {
+	return [...(Array.isArray(tasks) ? tasks : [])].sort(
+		(a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0),
+	)
+}
+
+function formatTaskTime(value) {
+	const timestamp = Number(value)
+	if (!Number.isFinite(timestamp) || timestamp <= 0) return '--'
+	return new Date(timestamp).toLocaleString(configCache[CONFIG_KEYS.I18N_LOCALE] || 'zh-CN', { hour12: false })
+}
+
+function getNormalizedTaskStatus(task) {
+	return ['waiting', 'processing', 'recorded', 'completed', 'failed'].includes(task?.status) ? task.status : 'recorded'
+}
+
+function addTaskRetryButton(parent, task) {
+	const retry = document.createElement('button')
+	retry.className = 'push115-task-retry'
+	retry.type = 'button'
+	retry.textContent = t('task_retry')
+	retry.addEventListener('click', async () => {
+		retry.disabled = true
+		try {
+			await sendMessage('RETRY_TASK', { taskId: task.taskId })
+			await refreshTaskList()
+		} catch (error) {
+			showStatus('error', error.message)
+			retry.disabled = false
+		}
+	})
+	parent.appendChild(retry)
+}
+
+function appendTaskLogs(parent, task) {
+	const logs = Array.isArray(task.logs) ? task.logs : []
+	const details = document.createElement('details')
+	details.className = 'push115-task-logs'
+	details.open = task.status === 'failed' || task.status === 'processing'
+	const summary = document.createElement('summary')
+	summary.textContent = `${t('task_logs')} (${logs.length})`
+	details.appendChild(summary)
+
+	if (logs.length === 0) {
+		const empty = document.createElement('div')
+		empty.className = 'push115-task-log-entry'
+		empty.textContent = t('no_background_tasks')
+		details.appendChild(empty)
+	} else {
+		for (const log of logs.slice(-60)) {
+			const entry = document.createElement('div')
+			entry.className = 'push115-task-log-entry'
+			const time = document.createElement('time')
+			time.textContent = formatTaskTime(log.at)
+			const message = document.createElement('span')
+			message.textContent = log.message || ''
+			entry.append(time, message)
+			details.appendChild(entry)
+		}
+	}
+
+	parent.appendChild(details)
+}
+
+function renderTaskList(tasks = []) {
+	const listEl = document.getElementById('push115-task-list')
+	if (!listEl) return
+
+	listEl.textContent = ''
+	const visibleTasks = getSortedTasks(tasks).slice(0, 8)
+	if (visibleTasks.length === 0) {
+		const empty = document.createElement('div')
+		empty.className = 'push115-task-empty'
+		empty.textContent = t('no_background_tasks')
+		listEl.appendChild(empty)
+		return
+	}
+
+	for (const task of visibleTasks) {
+		const item = document.createElement('div')
+		item.className = `push115-task-item ${getNormalizedTaskStatus(task)}`
+
+		const top = document.createElement('div')
+		top.className = 'push115-task-top'
+		const name = document.createElement('strong')
+		name.textContent = getTaskDisplayName(task)
+		const status = document.createElement('span')
+		status.className = 'push115-task-status'
+		status.textContent = getTaskStatusLabel(getNormalizedTaskStatus(task))
+		top.append(name, status)
+		item.appendChild(top)
+
+		const message = document.createElement('div')
+		message.className = 'push115-task-message'
+		message.textContent = task.message || ''
+		item.appendChild(message)
+
+		if (task.status === 'failed') addTaskRetryButton(item, task)
+		listEl.appendChild(item)
+	}
+}
+
+function renderTaskManager(tasks = []) {
+	const listEl = document.getElementById('push115-task-manager-list')
+	const summaryEl = document.getElementById('push115-task-manager-summary')
+	if (!listEl || !summaryEl) return
+
+	const visibleTasks = getSortedTasks(tasks).slice(0, 30)
+	summaryEl.textContent = replaceTaskCount(t('task_summary'), visibleTasks.length)
+	listEl.textContent = ''
+	if (visibleTasks.length === 0) {
+		const empty = document.createElement('div')
+		empty.className = 'push115-task-manager-empty'
+		empty.textContent = t('no_background_tasks')
+		listEl.appendChild(empty)
+		return
+	}
+
+	for (const task of visibleTasks) {
+		const status = getNormalizedTaskStatus(task)
+		const item = document.createElement('article')
+		item.className = `push115-task-manager-item ${status}`
+
+		const top = document.createElement('div')
+		top.className = 'push115-task-manager-top'
+		const name = document.createElement('strong')
+		name.textContent = getTaskDisplayName(task)
+		const statusEl = document.createElement('span')
+		statusEl.className = 'push115-task-manager-status'
+		statusEl.textContent = getTaskStatusLabel(status)
+		top.append(name, statusEl)
+		item.appendChild(top)
+
+		const meta = document.createElement('div')
+		meta.className = 'push115-task-manager-meta'
+		meta.textContent = [
+			task.remoteName ? `任务：${task.remoteName}` : '',
+			task.title || '',
+			task.source || '',
+			task.message || '',
+			formatTaskTime(task.updatedAt || task.createdAt),
+		].filter(Boolean).join(' · ')
+		item.appendChild(meta)
+
+		if (status === 'failed') {
+			const actions = document.createElement('div')
+			actions.className = 'push115-task-manager-actions'
+			addTaskRetryButton(actions, task)
+			item.appendChild(actions)
+		}
+
+		appendTaskLogs(item, task)
+		listEl.appendChild(item)
+	}
+}
+
+function renderTaskViews(tasks = []) {
+	renderTaskList(tasks)
+	renderTaskManager(tasks)
+}
+
+async function refreshTaskList() {
+	try {
+		const response = await sendMessage('GET_TASKS')
+		renderTaskViews(response.tasks || [])
+	} catch (error) {
+		console.error('读取后台任务失败:', error)
+	}
+}
+
 function applyTheme(theme) {
 	document.body.classList.remove('dark-theme')
 	if (theme === 'dark' || (theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
@@ -149,6 +376,7 @@ function applyLocale() {
 	// Update all text elements
 	document.getElementById('push115-title-text').textContent = t('panel_title')
 	document.querySelector('[data-tab="home"]').textContent = t('tab_home')
+	document.querySelector('[data-tab="tasks"]').textContent = t('tab_tasks')
 	document.querySelector('[data-tab="settings"]').textContent = t('tab_settings')
 	document.getElementById('label-save-path').textContent = t('save_path_label')
 	document.getElementById('hint-cid').textContent = t('cid_hint')
@@ -158,14 +386,25 @@ function applyLocale() {
 	document.getElementById('label-auto-delete').textContent = t('auto_delete_label')
 	document.getElementById('label-delete-pre').textContent = t('delete_size_label_pre')
 	document.getElementById('label-delete-post').textContent = t('delete_size_label_post')
+	document.getElementById('hint-delete-safe').textContent = t('delete_safe_hint')
 	document.getElementById('label-auto-organize').textContent = t('auto_organize_label')
 	document.getElementById('hint-organize').textContent = t('organize_hint')
 	document.getElementById('label-auto-detect').textContent = t('auto_detect_label')
 	document.getElementById('hint-auto-detect').textContent = t('auto_detect_hint')
 	setBtnContent('push115-check-login', 'icons/check.png', t('check_login_text'))
 	setBtnContent('push115-login-btn', 'icons/115.png', t('login_btn'))
+	document.getElementById('label-background-tasks').textContent = t('background_tasks_label')
+	document.getElementById('push115-open-task-manager').textContent = t('open_task_manager')
+	document.getElementById('label-task-manager').textContent = t('tab_tasks')
+	document.getElementById('hint-task-manager').textContent = t('manage_tasks_hint')
+	document.getElementById('push115-refresh-tasks').textContent = t('refresh_tasks')
+	document.getElementById('push115-open-options').textContent = t('open_options')
+	document.getElementById('hint-open-options').textContent = t('open_options_hint')
+	document.getElementById('push115-open-options-from-tasks').textContent = t('open_options')
+	document.getElementById('hint-options-from-tasks').textContent = t('open_options_hint')
 
 	renderSaveDirSelect()
+	void refreshTaskList()
 }
 
 function getRootLabel() {
@@ -209,6 +448,7 @@ async function init() {
 	document.getElementById('push115-save-dirs-input').value = getConfig(CONFIG_KEYS.SAVE_PATH_LIST)
 	document.getElementById('push115-auto-detect').checked = getConfig(CONFIG_KEYS.AUTO_DETECT)
 	renderSaveDirSelect()
+	await refreshTaskList()
 
 	if (getConfig(CONFIG_KEYS.AUTO_DELETE_SMALL)) {
 		document.getElementById('push115-delete-section').style.display = 'block'
@@ -219,15 +459,19 @@ async function init() {
 	bindLoginModalEvents()
 }
 
+function activateTab(tabName) {
+	document.querySelectorAll('.push115-tab').forEach(tab => tab.classList.remove('active'))
+	document.querySelectorAll('.push115-tab-content').forEach(content => content.classList.remove('active'))
+	const tab = document.querySelector(`.push115-tab[data-tab="${tabName}"]`)
+	const content = document.getElementById(`push115-tab-${tabName}`)
+	if (tab) tab.classList.add('active')
+	if (content) content.classList.add('active')
+}
+
 function bindEvents() {
 	// Tab switching
 	document.querySelectorAll('.push115-tab').forEach(tab => {
-		tab.addEventListener('click', () => {
-			document.querySelectorAll('.push115-tab').forEach(t => t.classList.remove('active'))
-			document.querySelectorAll('.push115-tab-content').forEach(c => c.classList.remove('active'))
-			tab.classList.add('active')
-			document.getElementById(`push115-tab-${tab.dataset.tab}`).classList.add('active')
-		})
+		tab.addEventListener('click', () => activateTab(tab.dataset.tab))
 	})
 
 	// Theme
@@ -319,6 +563,21 @@ function bindEvents() {
 	// Login Button - open modal
 	document.getElementById('push115-login-btn').addEventListener('click', () => {
 		showLoginModal()
+	})
+
+	// Open the in-popup task manager from the Home tab
+	document.getElementById('push115-open-task-manager').addEventListener('click', () => {
+		activateTab('tasks')
+	})
+
+	document.getElementById('push115-refresh-tasks').addEventListener('click', refreshTaskList)
+
+	// Full settings and logs page
+	document.getElementById('push115-open-options').addEventListener('click', () => {
+		chrome.runtime.openOptionsPage()
+	})
+	document.getElementById('push115-open-options-from-tasks').addEventListener('click', () => {
+		chrome.runtime.openOptionsPage()
 	})
 }
 
@@ -490,6 +749,10 @@ async function startLoginFlow(selectedApp) {
 		if (statusEl) statusEl.textContent = ' 发生错误: ' + e.message
 	}
 }
+
+chrome.runtime.onMessage.addListener(request => {
+	if (request.action === 'TASK_UPDATED') void refreshTaskList()
+})
 
 // Start
 document.addEventListener('DOMContentLoaded', init)

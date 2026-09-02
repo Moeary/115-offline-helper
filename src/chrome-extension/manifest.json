@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "115 Offline Helper",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Automatically detect magnet/ed2k links and push to 115.com offline download.",
   "permissions": [
     "storage",
     "cookies",
     "notifications",
+    "alarms",
     "activeTab",
     "scripting"
   ],
@@ -19,6 +20,10 @@
   "action": {
     "default_title": "115 Offline Helper",
     "default_popup": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "background": {
     "service_worker": "background.js"

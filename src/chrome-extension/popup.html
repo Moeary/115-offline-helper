@@ -29,10 +29,11 @@
 				</div>
 			</div>
 
-			<div class="push115-tabs">
-				<div class="push115-tab active" data-tab="home">主页</div>
-				<div class="push115-tab" data-tab="settings">设置</div>
-			</div>
+				<div class="push115-tabs">
+					<div class="push115-tab active" data-tab="home">主页</div>
+					<div class="push115-tab" data-tab="tasks">后台管理</div>
+					<div class="push115-tab" data-tab="settings">设置</div>
+				</div>
 
 			<div class="push115-content">
 				<!-- Home Tab -->
@@ -43,6 +44,14 @@
 						<div class="push115-progress-track">
 							<div class="push115-progress-bar" id="push115-progress-bar"></div>
 						</div>
+					</div>
+
+					<div class="push115-section push115-task-section">
+						<div class="push115-task-heading">
+							<label class="push115-label" id="label-background-tasks">后台任务</label>
+							<button class="push115-task-manage-btn" id="push115-open-task-manager" type="button">后台管理</button>
+						</div>
+						<div id="push115-task-list" class="push115-task-list"></div>
 					</div>
 
 					<div class="push115-section">
@@ -77,6 +86,7 @@
 							/>
 							<span id="label-delete-post">MB 的文件</span>
 						</div>
+						<div class="push115-hint" id="hint-delete-safe">仅回收明确垃圾；字幕、图片、NFO 默认保留，视频还会避开主视频和 CD1/CD2。</div>
 					</div>
 
 					<div class="push115-section">
@@ -98,6 +108,25 @@
 							<img src="icons/115.png" width="16" height="16" />
 							扫码登录
 						</button>
+					</div>
+				</div>
+
+				<!-- Background Task Manager Tab -->
+				<div class="push115-tab-content" id="push115-tab-tasks">
+					<div class="push115-task-manager-header">
+						<div>
+							<h2 class="push115-task-manager-title" id="label-task-manager">后台管理</h2>
+							<div class="push115-hint" id="hint-task-manager">查看任务状态、完整日志和失败重试。</div>
+						</div>
+						<button class="push115-btn push115-btn-secondary" id="push115-refresh-tasks" type="button">刷新</button>
+					</div>
+					<div class="push115-task-manager-summary" id="push115-task-manager-summary"></div>
+					<div id="push115-task-manager-list" class="push115-task-manager-list"></div>
+					<div class="push115-section push115-options-entry">
+						<button class="push115-btn push115-btn-secondary push115-btn-full" id="push115-open-options-from-tasks" type="button">
+							打开高级设置
+						</button>
+						<div class="push115-hint" id="hint-options-from-tasks">扩展名规则和清理开关可在完整设置页调整。</div>
 					</div>
 				</div>
 
@@ -144,6 +173,13 @@
 							>
 						</div>
 						<div class="push115-hint" id="hint-auto-detect">在所有网页上自动检测 magnet/ed2k 链接（需要额外权限）</div>
+					</div>
+
+					<div class="push115-section push115-options-entry">
+						<button class="push115-btn push115-btn-secondary push115-btn-full" id="push115-open-options" type="button">
+							打开完整设置与日志
+						</button>
+						<div class="push115-hint" id="hint-open-options">在独立页面管理扩展名规则，并查看后台处理日志。</div>
 					</div>
 				</div>
 			</div>

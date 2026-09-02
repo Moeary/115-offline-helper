@@ -11,6 +11,11 @@ const CONFIG_KEYS = {
 	AUTO_DETECT: 'push115_auto_detect',
 	I18N_LOCALE: 'push115_i18n_locale',
 	THEME: 'push115_theme',
+	JUNK_EXTENSIONS: 'push115_junk_extensions',
+	PRESERVE_EXTENSIONS: 'push115_preserve_extensions',
+	CLEAN_EXTENSIONS: 'push115_clean_extensions',
+	CLEAN_IMAGES: 'push115_clean_images',
+	CLEAN_NFO: 'push115_clean_nfo',
 }
 
 const DEFAULT_CONFIG = {
@@ -23,6 +28,11 @@ const DEFAULT_CONFIG = {
 	[CONFIG_KEYS.AUTO_DETECT]: false,
 	[CONFIG_KEYS.I18N_LOCALE]: 'zh-CN',
 	[CONFIG_KEYS.THEME]: 'auto',
+	[CONFIG_KEYS.JUNK_EXTENSIONS]: '.url, .html, .htm, .txt, .exe, .bat, .cmd, .torrent',
+	[CONFIG_KEYS.PRESERVE_EXTENSIONS]: '.srt, .ass, .ssa, .sup, .vtt',
+	[CONFIG_KEYS.CLEAN_EXTENSIONS]: '',
+	[CONFIG_KEYS.CLEAN_IMAGES]: false,
+	[CONFIG_KEYS.CLEAN_NFO]: false,
 }
 
 const I18N_STRINGS = {
@@ -161,358 +171,9 @@ function extractVideoCode(rawName) {
 	return ''
 }
 
-// ========== 115 API Wrappers ==========
+// ========== Page Metadata / Configuration ==========
 
-async function getOfflineTasks() {
-	const res = await sendMessage('API_REQUEST', {
-		url: 'https://115.com/web/lixian/?ct=lixian&ac=task_lists',
-		method: 'GET',
-	})
-	if (res.data?.state) {
-		return res.data.tasks || []
-	}
-	throw new Error('获取任务列表失败')
-}
-
-async function getFileList(cid = '0') {
-	const res = await sendMessage('API_REQUEST', {
-		url: `https://webapi.115.com/files?aid=1&cid=${cid}&o=user_ptime&asc=0&offset=0&show_dir=1&limit=500&snap=0&natsort=1`,
-		method: 'GET',
-	})
-	return res.data // Return full response
-}
-
-async function createFolder(parentCid, folderName) {
-	const res = await sendMessage('API_REQUEST', {
-		url: 'https://webapi.115.com/files/add',
-		method: 'POST',
-		data: { pid: parentCid, cname: folderName },
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-	})
-	return res.data
-}
-
-async function moveFile(fid, targetCid) {
-	const res = await sendMessage('API_REQUEST', {
-		url: 'https://webapi.115.com/files/move',
-		method: 'POST',
-		data: { pid: targetCid, fid: fid, move_proid: '' },
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-	})
-	return res.data
-}
-
-async function renameFile(fid, newName) {
-	const res = await sendMessage('API_REQUEST', {
-		url: 'https://webapi.115.com/files/edit',
-		method: 'POST',
-		data: { fid, name: newName },
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-	})
-	return res.data
-}
-
-async function deleteFiles(fids) {
-	const ids = Array.isArray(fids) ? fids : [fids]
-	const params = new URLSearchParams()
-	ids.forEach((fid, index) => {
-		params.append(`fid[${index}]`, fid)
-	})
-	params.append('ignore_warn', '1')
-
-	const res = await sendMessage('API_REQUEST', {
-		url: 'https://webapi.115.com/rb/delete',
-		method: 'POST',
-		data: params.toString(),
-		headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-	})
-	return res.data
-}
-
-const sleep = ms => new Promise(r => setTimeout(r, ms))
-
-async function cleanSmallFiles(cid, thresholdMB) {
-	const thresholdBytes = thresholdMB * 1024 * 1024
-	const allSmallFiles = []
-
-	const scanFolder = async (folderId, depth = 0) => {
-		if (depth > 3) return
-		const fileList = await getFileList(folderId)
-		if (!fileList.data || !Array.isArray(fileList.data)) return
-
-		for (const item of fileList.data) {
-			if (!item.sha) {
-				// Folder
-				const folderCid = item.cid || item.fid
-				if (folderCid && folderCid !== folderId) {
-					await scanFolder(folderCid, depth + 1)
-				}
-				continue
-			}
-
-			const fileSize = item.size || item.s || 0
-			if (fileSize > 0 && fileSize < thresholdBytes) {
-				allSmallFiles.push({ fid: item.fid, name: item.n || item.name })
-			}
-		}
-	}
-
-	await scanFolder(cid)
-
-	if (allSmallFiles.length > 0) {
-		const fileIds = allSmallFiles.map(f => f.fid)
-		// 115 API expects 'fid' to be an array or multiple parameters
-		await deleteFiles(fileIds)
-	}
-	return allSmallFiles.length
-}
-
-async function monitorTaskAndOrganize(taskMeta, savePathCid, modalType = 'default') {
-	const maxRetries = 120
-	let retries = 0
-	let taskName = taskMeta?.name || ''
-	let taskFileCid = ''
-
-	if (modalType === 'toast') {
-		showStickyToast('info', '已推送成功，正在等待离线任务完成，请勿关闭页面...')
-	}
-
-	const resolveTaskFolderCid = async () => {
-		if (taskFileCid) return taskFileCid
-		if (!taskName) return ''
-
-		const list = await getFileList(savePathCid)
-		if (!list.data || !Array.isArray(list.data)) return ''
-
-		const normalize = v => (v || '').toString().trim().toLowerCase()
-		const taskNameNorm = normalize(taskName)
-		const folders = list.data.filter(item => !item.sha)
-
-		const exact = folders.find(item => normalize(item.n || item.name) === taskNameNorm)
-		if (exact) return exact.cid || exact.fid
-
-		const fuzzy = folders.find(item => normalize(item.n || item.name).includes(taskNameNorm))
-		if (fuzzy) return fuzzy.cid || fuzzy.fid
-
-		return ''
-	}
-
-	const ensureUsableCid = async candidateCid => {
-		if (!candidateCid) return ''
-		try {
-			const list = await getFileList(candidateCid)
-			if (list?.data && Array.isArray(list.data)) return candidateCid
-		} catch (e) {
-			console.log('[监控] 目录不可用，准备回退:', candidateCid, e?.message || e)
-		}
-		return ''
-	}
-
-	const processByCid = async (targetCid, currentFolderName = '') => {
-		const autoDelete = getConfig(CONFIG_KEYS.AUTO_DELETE_SMALL)
-		const autoOrganize = getConfig(CONFIG_KEYS.AUTO_ORGANIZE)
-		const messages = []
-
-		if (autoDelete) {
-			if (modalType === 'toast') showStickyToast('info', '正在删除小文件，请稍候...')
-			const threshold = Number(getConfig(CONFIG_KEYS.DELETE_SIZE_THRESHOLD) || 100)
-			const deletedCount = await cleanSmallFiles(targetCid, threshold)
-			if (deletedCount > 0) messages.push(`删除 ${deletedCount} 个小文件`)
-		}
-
-		if (autoOrganize) {
-			if (modalType === 'toast') showStickyToast('info', '正在按文件名整理视频，请稍候...')
-			const organizedCount = await organizeVideos(targetCid, currentFolderName)
-			if (organizedCount > 0) messages.push(`整理 ${organizedCount} 个视频`)
-		}
-
-		if (modalType === 'toast') {
-			hideStickyToast()
-			if (messages.length > 0) {
-				showToast('success', ` ${messages.join('，')}`, 6000)
-			} else {
-				showToast('warning', '处理完成，但未发现可移动的视频文件（可能仍在系统处理中）', 7000)
-			}
-		}
-	}
-
-	while (retries < maxRetries) {
-		try {
-			await sleep(10000)
-			const tasks = await getOfflineTasks()
-			const task = tasks.find(
-				t =>
-					(taskMeta?.id && (t.info_hash === taskMeta.id || t.name === taskMeta.id)) ||
-					(taskName && t.name === taskName),
-			)
-
-			if (!task) {
-				if (modalType === 'toast' && retries % 3 === 0) {
-					showStickyToast('info', `正在等待任务进入列表（已等待 ${Math.floor((retries * 10) / 60)} 分钟）...`)
-				}
-				retries++
-				continue
-			}
-
-			if (!taskName && task.name) taskName = task.name
-			if (!taskFileCid) {
-				taskFileCid = task.file_id || task.fileId || task.dir_id || task.dirId || task.wppath_id || ''
-			}
-
-			const isCompleted = task.status === 2 || task.percentDone === 100 || task.state === 1
-			if (!isCompleted) {
-				if (task.status === -1 || task.state === 2) {
-					if (modalType === 'toast') {
-						hideStickyToast()
-						showToast('error', t('push_fail') + (task.error_msg || 'Unknown error'))
-					}
-					return
-				}
-				if (modalType === 'toast' && retries % 2 === 0) {
-					const percent = typeof task.percentDone === 'number' ? `${task.percentDone}%` : '进行中'
-					showStickyToast('info', `离线任务处理中（${percent}），请等待...`)
-				}
-				retries++
-				continue
-			}
-
-			if (modalType === 'toast') {
-				showStickyToast('info', '离线任务已完成，正在处理文件...')
-			}
-
-			const taskFolderCid = await ensureUsableCid(taskFileCid || (await resolveTaskFolderCid()))
-			const targetCid = taskFolderCid || (await ensureUsableCid(savePathCid))
-			if (!targetCid) {
-				if (modalType === 'toast') {
-					hideStickyToast()
-					showToast('error', '未找到可处理目录，请稍后重试', 7000)
-				}
-				return
-			}
-
-			// 仅当明确定位到“任务文件夹”时，才把任务名作为当前目录名用于 skip 逻辑
-			const organizeFolderName = taskFolderCid ? taskName : ''
-			await processByCid(targetCid, organizeFolderName)
-			return
-		} catch (err) {
-			console.error('Monitor error:', err)
-			if (modalType === 'toast' && retries % 3 === 0) {
-				showStickyToast('warning', '网络波动，正在重试处理...')
-			}
-			retries++
-		}
-	}
-
-	// 超时后兜底：直接在保存目录做一次处理
-	try {
-		if (modalType === 'toast') {
-			showStickyToast('warning', '监控超时，正在尝试按保存目录执行一次兜底处理...')
-		}
-		const fallbackCid = await ensureUsableCid(savePathCid)
-		if (fallbackCid) {
-			await processByCid(fallbackCid, '')
-			return
-		}
-	} catch (e) {
-		console.error('[监控] 兜底处理失败:', e)
-	}
-
-	if (modalType === 'toast') {
-		hideStickyToast()
-		showToast('error', '处理超时，建议稍后在 115 网页手动刷新后重试', 8000)
-	}
-}
-
-async function organizeVideos(cid, currentFolderName = '') {
-	const maxPasses = 8
-	let organizedCount = 0
-	for (let pass = 0; pass < maxPasses; pass++) {
-		const fileList = await getFileList(cid)
-		if (!fileList.data || !Array.isArray(fileList.data)) break
-
-		const videoFiles = fileList.data.filter(f => {
-			if (!f.sha) return false
-			const name = (f.n || f.name || '').toLowerCase()
-			return VIDEO_EXTENSIONS.some(ext => name.endsWith(ext))
-		})
-
-		if (videoFiles.length === 0) break
-		let movedInPass = 0
-		let moveFailedInPass = 0
-
-		for (const video of videoFiles) {
-			try {
-				const fileName = video.n || video.name
-				const extMatch = fileName.match(/\.[^.]+$/)
-				const ext = extMatch ? extMatch[0] : ''
-				const code = extractVideoCode(fileName)
-				const folderName = code || fileName.replace(/\.[^.]+$/, '').toUpperCase()
-				const currentNameNormalized = normalizeCode(currentFolderName)
-				const folderNameNormalized = normalizeCode(folderName)
-				const shouldSkipFolder =
-					currentNameNormalized &&
-					folderNameNormalized &&
-					(currentNameNormalized === folderNameNormalized ||
-						currentNameNormalized.includes(folderNameNormalized) ||
-						folderNameNormalized.includes(currentNameNormalized))
-
-				let canRename = false
-				let targetCid
-				if (shouldSkipFolder) {
-					// 已在匹配目录中，不需要移动；只执行可能的重命名
-					canRename = true
-				} else {
-					const existingFolder = fileList.data.find(f => !f.sha && (f.n || f.name).toUpperCase() === folderName)
-					if (existingFolder) {
-						targetCid = existingFolder.cid || existingFolder.fid
-					} else {
-						const createRes = await createFolder(cid, folderName)
-						if (createRes.cid || createRes.file_id) {
-							targetCid = createRes.cid || createRes.file_id
-						} else {
-							const updatedList = await getFileList(cid)
-							const folder = updatedList.data?.find(f => !f.sha && (f.n || f.name)?.toUpperCase() === folderName)
-							targetCid = folder ? folder.cid || folder.fid : ''
-						}
-					}
-					if (targetCid) {
-						const moveResult = await moveFile(video.fid, targetCid)
-						if (moveResult?.state === true) {
-							organizedCount++
-							movedInPass++
-							canRename = true
-						} else {
-							moveFailedInPass++
-							console.log('[整理] 移动失败，稍后重试:', fileName, moveResult)
-						}
-					}
-				}
-
-				if (code && canRename) {
-					const newName = `${code}${ext}`
-					if (newName !== fileName) {
-						await renameFile(video.fid, newName)
-					}
-				}
-
-				await sleep(500)
-			} catch (err) {
-				console.error('Organize error:', err)
-			}
-		}
-
-		// 有成功移动，立即进行下一轮，处理刷新后的列表
-		if (movedInPass > 0) continue
-
-		// 没有移动失败，说明无需重试（可能已在目标目录或无可处理视频）
-		if (moveFailedInPass === 0) break
-
-		// 有移动失败，通常是 115 仍在“系统处理中”，等待后再试
-		await sleep(15000)
-	}
-	return organizedCount
-}
-
+// 115 API calls and long-running task processing are handled by background.js.
 let configCache = { ...DEFAULT_CONFIG }
 
 function t(key) {
@@ -569,6 +230,41 @@ function detectOfflineLink(text) {
 		return { url: text, type: 'ED2K' }
 	}
 	return null
+}
+
+function extractMagnetHash(url) {
+	try {
+		const parsed = new URL(url)
+		const xt = parsed.searchParams.get('xt') || ''
+		const match = xt.match(/^urn:btih:([a-z0-9]{32,40})$/i)
+		return match ? match[1].toLowerCase() : ''
+	} catch (error) {
+		return ''
+	}
+}
+
+function getPageMetadata(anchor = null) {
+	const title = (document.title || '').trim()
+	const source = window.location?.hostname || ''
+	const candidates = [
+		anchor?.textContent,
+		document.querySelector('h1')?.textContent,
+		document.querySelector('h2')?.textContent,
+		document.querySelector('meta[property="og:title"]')?.content,
+		title,
+		window.location?.pathname,
+	]
+
+	let code = ''
+	for (const candidate of candidates) {
+		const detected = extractVideoCode(candidate)
+		if (detected) {
+			code = detected
+			break
+		}
+	}
+
+	return { code, title, source }
 }
 
 function getRootLabel() {
@@ -736,7 +432,7 @@ function hideStickyToast() {
 	}
 }
 
-function createConfirmModal(url, type) {
+function createConfirmModal(url, type, pageMeta = getPageMetadata()) {
 	const existing = document.getElementById('push115-modal-overlay')
 	if (existing) existing.remove()
 
@@ -777,6 +473,13 @@ function createConfirmModal(url, type) {
 	linkDiv.className = 'push115-modal-link'
 	linkDiv.textContent = url
 	body.appendChild(linkDiv)
+
+	if (pageMeta?.code) {
+		const codeInfo = document.createElement('div')
+		codeInfo.className = 'push115-modal-info'
+		codeInfo.textContent = `番号: ${pageMeta.code}`
+		body.appendChild(codeInfo)
+	}
 
 	const pathRow = document.createElement('div')
 	pathRow.className = 'push115-modal-path-row'
@@ -858,22 +561,30 @@ function createConfirmModal(url, type) {
 			})
 
 			if (res.data && res.data.state) {
-				overlay.remove()
-				showToast('success', t('push_success'))
-
-				// Start monitoring and organizing if feature is enabled
 				const autoOrganize = getConfig(CONFIG_KEYS.AUTO_ORGANIZE)
 				const autoDelete = getConfig(CONFIG_KEYS.AUTO_DELETE_SMALL)
-
-				if (autoOrganize || autoDelete) {
-					monitorTaskAndOrganize(
-						{
-							id: res.data.info_hash || res.data.name || url,
-							name: res.data.name || '',
-						},
+				let queueError = null
+				try {
+					await sendMessage('QUEUE_TASK', {
+						remoteId: res.data.info_hash || res.data.hash || res.data.task_id || extractMagnetHash(url),
+						name: res.data.name || '',
+						magnet: url,
+						code: pageMeta?.code || '',
+						title: pageMeta?.title || document.title || '',
+						source: pageMeta?.source || window.location?.hostname || '',
 						savePathCid,
-						'toast',
-					)
+						monitor: autoOrganize || autoDelete,
+					})
+				} catch (error) {
+					queueError = error
+					console.error('[推送] 后台任务登记失败:', error)
+				}
+
+				overlay.remove()
+				if (queueError && (autoOrganize || autoDelete)) {
+					showToast('warning', `${t('push_success')} 后台任务登记失败，请重新加载扩展后重试`)
+				} else {
+					showToast('success', t('push_success'))
 				}
 			} else {
 				throw new Error(res.data?.error_msg || 'Unknown error')
@@ -902,10 +613,10 @@ async function init() {
 		const href = link.href
 		if (href && href.startsWith('magnet:')) {
 			e.preventDefault()
-			createConfirmModal(href, 'Magnet')
+			createConfirmModal(href, 'Magnet', getPageMetadata(link))
 		} else if (href && href.startsWith('ed2k://')) {
 			e.preventDefault()
-			createConfirmModal(href, 'ED2K')
+			createConfirmModal(href, 'ED2K', getPageMetadata(link))
 		}
 	})
 

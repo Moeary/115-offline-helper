@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>115离线助手设置</title>
+		<link rel="stylesheet" href="options.css" />
+	</head>
+	<body>
+		<div class="push115-options-shell">
+			<header class="push115-options-header">
+				<div class="push115-brand">
+					<img src="icons/logo.png" width="48" height="48" alt="115 Offline Helper" />
+					<div>
+						<h1 data-i18n="page_title">115离线助手设置</h1>
+						<p data-i18n="page_subtitle">规则、任务与日志集中管理</p>
+					</div>
+				</div>
+			</header>
+
+			<main class="push115-options-layout">
+				<section class="push115-card">
+					<div class="push115-card-heading">
+						<div>
+							<h2 data-i18n="settings_title">设置</h2>
+							<p data-i18n="settings_subtitle">这些设置会被后台任务和网页推送共同使用。</p>
+						</div>
+					</div>
+
+					<form id="push115-settings-form">
+						<div class="push115-field-grid">
+							<div class="push115-field">
+								<label for="push115-language-select" data-i18n="language_label">语言 / Language</label>
+								<select id="push115-language-select">
+									<option value="zh-CN">简体中文</option>
+									<option value="en-US">English</option>
+								</select>
+							</div>
+							<div class="push115-field">
+								<label for="push115-theme-select" data-i18n="theme_label">主题 / Theme</label>
+								<select id="push115-theme-select">
+									<option value="auto" data-i18n="theme_auto">跟随系统</option>
+									<option value="light" data-i18n="theme_light">浅色</option>
+									<option value="dark" data-i18n="theme_dark">深色</option>
+								</select>
+							</div>
+						</div>
+
+						<div class="push115-field-grid">
+							<div class="push115-field">
+								<label for="push115-default-save-cid" data-i18n="save_cid_label">默认保存目录 CID</label>
+								<input id="push115-default-save-cid" type="text" inputmode="numeric" placeholder="0" />
+								<p class="push115-hint" data-i18n="save_cid_hint">根目录填 0；目录列表中的 CID 也可在弹窗主页选择。</p>
+							</div>
+							<div class="push115-field">
+								<label for="push115-delete-size" data-i18n="threshold_label">小视频阈值（MB）</label>
+								<input id="push115-delete-size" type="number" min="1" step="1" />
+								<p class="push115-hint" data-i18n="threshold_hint">阈值只用于筛选；主视频、CD/Disc/Part 分片不会因体积小而删除。</p>
+							</div>
+						</div>
+
+						<div class="push115-field">
+							<label for="push115-save-dirs-input" data-i18n="save_dirs_label">115 离线目录（一行一个）</label>
+							<textarea id="push115-save-dirs-input" rows="4" data-placeholder="save_dirs_placeholder" placeholder="例如：电影:123456789"></textarea>
+							<p class="push115-hint" data-i18n="save_dirs_hint">格式：目录名:CID，例如：电影:123456789。</p>
+						</div>
+
+						<div class="push115-divider"></div>
+
+						<div class="push115-toggle-grid">
+							<label class="push115-toggle">
+								<input id="push115-auto-delete" type="checkbox" />
+								<span>
+									<strong data-i18n="auto_delete_label">安全清理广告/垃圾文件</strong>
+									<small data-i18n="auto_delete_hint">只处理明确命中的扩展名或小广告视频。</small>
+								</span>
+							</label>
+							<label class="push115-toggle">
+								<input id="push115-auto-organize" type="checkbox" />
+								<span>
+									<strong data-i18n="auto_organize_label">自动整理视频文件</strong>
+									<small data-i18n="auto_organize_hint">优先使用页面番号整理任务文件夹、主视频和字幕。</small>
+								</span>
+							</label>
+							<label class="push115-toggle">
+								<input id="push115-auto-detect" type="checkbox" />
+								<span>
+									<strong data-i18n="auto_detect_label">自动识别链接</strong>
+									<small data-i18n="auto_detect_hint">在所有网页检测 magnet/ed2k，需要额外页面权限。</small>
+								</span>
+							</label>
+						</div>
+
+						<div class="push115-divider"></div>
+
+						<div class="push115-rule-heading">
+							<h3 data-i18n="rules_title">文件扩展名规则</h3>
+							<p data-i18n="rules_subtitle">每行或用逗号分隔；扩展名可带或不带点。</p>
+						</div>
+						<div class="push115-field-grid">
+							<div class="push115-field">
+								<label for="push115-junk-extensions" data-i18n="junk_extensions_label">明确垃圾扩展名（直接回收）</label>
+								<textarea id="push115-junk-extensions" rows="5" data-placeholder="junk_extensions_placeholder"></textarea>
+								<p class="push115-hint" data-i18n="junk_extensions_hint">默认包含 .html、.htm、.txt 等下载附带文件；移除某项即可保留该类型。</p>
+							</div>
+							<div class="push115-field">
+								<label for="push115-preserve-extensions" data-i18n="preserve_extensions_label">保护扩展名（永不自动清理）</label>
+								<textarea id="push115-preserve-extensions" rows="5" data-placeholder="preserve_extensions_placeholder"></textarea>
+								<p class="push115-hint" data-i18n="preserve_extensions_hint">字幕默认在这里；若同一扩展名同时出现，保护规则优先。</p>
+							</div>
+					</div>
+
+						<div class="push115-field">
+							<label for="push115-clean-extensions" data-i18n="clean_extensions_label">可选清理扩展名（仅小于阈值）</label>
+							<textarea id="push115-clean-extensions" rows="3" data-placeholder="clean_extensions_placeholder"></textarea>
+							<p class="push115-hint" data-i18n="clean_extensions_hint">默认为空。适合放入你确认无用的非视频扩展名；不会替代视频安全判断。</p>
+						</div>
+
+						<div class="push115-toggle-grid push115-toggle-grid-small">
+							<label class="push115-toggle">
+								<input id="push115-clean-images" type="checkbox" />
+								<span>
+									<strong data-i18n="clean_images_label">清理图片/海报</strong>
+									<small data-i18n="clean_images_hint">默认关闭；开启后，小于阈值的常见图片会进入回收候选。</small>
+								</span>
+							</label>
+							<label class="push115-toggle">
+								<input id="push115-clean-nfo" type="checkbox" />
+								<span>
+									<strong data-i18n="clean_nfo_label">清理 NFO</strong>
+									<small data-i18n="clean_nfo_hint">默认关闭；开启后，小于阈值的 .nfo 会进入回收候选。</small>
+								</span>
+							</label>
+						</div>
+
+						<div class="push115-form-actions">
+							<button class="push115-btn push115-btn-primary" id="push115-save-settings" type="submit" data-i18n="save_button">保存设置</button>
+							<button class="push115-btn push115-btn-secondary" id="push115-reset-settings" type="button" data-i18n="reset_button">恢复默认</button>
+						</div>
+						<div id="push115-settings-status" class="push115-status" role="status" aria-live="polite"></div>
+					</form>
+				</section>
+
+				<section class="push115-card push115-log-card">
+					<div class="push115-card-heading push115-log-heading">
+						<div>
+							<h2 data-i18n="logs_title">后台任务与日志</h2>
+							<p data-i18n="logs_subtitle">这里会保留最近任务的处理状态、错误和清理明细。</p>
+						</div>
+						<button class="push115-btn push115-btn-secondary" id="push115-refresh-logs" type="button" data-i18n="refresh_button">刷新</button>
+					</div>
+					<div id="push115-log-summary" class="push115-log-summary"></div>
+					<div id="push115-log-list" class="push115-log-list"></div>
+				</section>
+			</main>
+		</div>
+
+		<script src="options.js"></script>
+	</body>
+</html>
