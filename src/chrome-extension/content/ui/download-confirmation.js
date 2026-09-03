@@ -1,0 +1,203 @@
+;(function (global) {
+	'use strict'
+	const content = global.Push115.Content = global.Push115.Content || {}
+	const pathUtils = global.Push115.PathUtils
+	const intentApi = global.Push115.DownloadIntent
+	const SITE_LABELS = Object.freeze({ generic: 'Generic', javbus: 'JavBus', nyaa: 'Nyaa', sukebei: 'Sukebei', mikan: 'Mikan' })
+	const PROFILE_LABELS = Object.freeze({ generic: 'Generic', jav: 'JAV', anime: 'Anime' })
+
+	function normalizeInput(input) {
+		if (Array.isArray(input)) return { intents: input }
+		if (input?.intents || input?.initialText !== undefined) return input
+		return { intents: input ? [input] : [] }
+	}
+
+	function profileWarning(profile, intents) {
+		if (profile === 'jav') {
+			const code = intents.find(intent => intent.code || intent.metadata?.pageCode)?.code
+			return `JAV 规则会尝试按番号重命名主视频、字幕和文件夹。${code ? `当前番号：${code}` : '当前未检测到明确番号，将谨慎依现有文件名处理。'}`
+		}
+		if (profile === 'anime') return 'Anime 规则会保留 torrent 原有名称和目录结构，只执行已启用的安全垃圾清理。'
+		return 'Generic 规则只执行已启用的通用安全清理，不会按番号重命名。'
+	}
+
+	function rowLabel(row) {
+		return `第 ${row.line} 行：${row.status === 'invalid' ? row.message : `重复于第 ${row.duplicateOf} 行`}`
+	}
+
+	async function show(rawInput) {
+		const input = normalizeInput(rawInput)
+		const config = await global.Push115.Config.loadConfig()
+		const keys = global.Push115.Config.STORAGE_KEYS
+		const intents = (input.intents || []).map(intent => intentApi.create(intent))
+		const sourceSite = String(input.sourceSite || intents[0]?.sourceSite || 'generic').toLowerCase()
+		const siteProfile = config[keys.SITE_PROFILES]?.[sourceSite] || {}
+		const defaultProfile = global.Push115.Config.normalizeProcessorProfile(
+			input.defaultProcessorProfile || intents[0]?.processorProfile || siteProfile.defaultProcessorProfile,
+			'generic',
+		)
+		const currentCid = pathUtils.normalizeCid(
+			input.defaultSavePathCid || intents[0]?.savePathCid || siteProfile.defaultSavePathCid || config[keys.SAVE_PATH_CID],
+		) || '0'
+		const concurrency = Math.min(6, Math.max(1, Math.round(Number(input.batchConcurrency || siteProfile.batchConcurrency) || 2)))
+		const rootLabel = config[keys.I18N_LOCALE] === 'en-US' ? 'Root' : '根目录'
+		const pathOptions = pathUtils.buildPathOptions(config[keys.SAVE_PATH_LIST] || '', rootLabel)
+		if (!pathOptions.some(item => item.cid === currentCid)) pathOptions.push({ name: '', cid: currentCid })
+
+		document.getElementById('push115-modal-overlay')?.remove()
+		const overlay = document.createElement('div')
+		overlay.id = 'push115-modal-overlay'
+		overlay.className = 'push115-modal-overlay'
+		const modal = document.createElement('div')
+		modal.className = 'push115-modal push115-download-confirmation'
+		const header = document.createElement('div')
+		header.className = 'push115-modal-header'
+		const heading = document.createElement('h3')
+		heading.className = 'push115-modal-title'
+		heading.textContent = '下载任务'
+		header.appendChild(heading)
+		const body = document.createElement('div')
+		body.className = 'push115-modal-body'
+
+		const source = document.createElement('p')
+		source.className = 'push115-modal-info'
+		source.textContent = `来源网站：${SITE_LABELS[sourceSite] || sourceSite}`
+		const textareaLabel = document.createElement('label')
+		textareaLabel.className = 'push115-modal-field-label'
+		textareaLabel.textContent = '磁链 / ED2K（每行一个，可编辑）'
+		const textarea = document.createElement('textarea')
+		textarea.className = 'push115-modal-textarea'
+		textarea.rows = 7
+		textarea.spellcheck = false
+		textarea.value = input.initialText !== undefined ? String(input.initialText) : intents.map(intent => intent.url).join('\n')
+		textarea.placeholder = 'magnet:?xt=urn:btih:...\ned2k://|file|...'
+		const validation = document.createElement('div')
+		validation.className = 'push115-validation'
+
+		const profileLabel = document.createElement('label')
+		profileLabel.className = 'push115-modal-field-label'
+		profileLabel.textContent = '应用规则'
+		const processorSelect = document.createElement('select')
+		processorSelect.className = 'push115-modal-select'
+		for (const name of global.Push115.Config.PROCESSOR_PROFILES) {
+			const option = document.createElement('option')
+			option.value = name
+			option.textContent = PROFILE_LABELS[name]
+			option.selected = name === defaultProfile
+			processorSelect.appendChild(option)
+		}
+		const warning = document.createElement('p')
+		warning.className = 'push115-profile-warning'
+
+		const pathLabel = document.createElement('label')
+		pathLabel.className = 'push115-modal-field-label'
+		pathLabel.textContent = '115 保存目录'
+		const pathSelect = document.createElement('select')
+		pathSelect.className = 'push115-modal-select'
+		for (const item of pathOptions) {
+			const option = document.createElement('option')
+			option.value = item.cid
+			option.textContent = pathUtils.formatPathLabel(item, rootLabel)
+			option.selected = item.cid === currentCid
+			pathSelect.appendChild(option)
+		}
+		body.append(source, textareaLabel, textarea, validation, profileLabel, processorSelect, warning, pathLabel, pathSelect)
+
+		const footer = document.createElement('div')
+		footer.className = 'push115-modal-footer'
+		const cancel = document.createElement('button')
+		cancel.className = 'push115-modal-btn push115-modal-btn-cancel'
+		cancel.type = 'button'
+		cancel.textContent = '取消'
+		const confirm = document.createElement('button')
+		confirm.className = 'push115-modal-btn push115-modal-btn-confirm'
+		confirm.type = 'button'
+		footer.append(cancel, confirm)
+		modal.append(header, body, footer)
+		overlay.appendChild(modal)
+		document.body.appendChild(overlay)
+
+		const sourceByKey = new Map()
+		for (const intent of intents) sourceByKey.set(intentApi.dedupeKey(intent.url), intent)
+
+		function renderValidation() {
+			const rows = intentApi.parseLines(textarea.value)
+			const valid = rows.filter(row => row.status === 'valid').length
+			const invalid = rows.filter(row => row.status === 'invalid')
+			const duplicates = rows.filter(row => row.status === 'duplicate')
+			validation.textContent = ''
+			const summary = document.createElement('p')
+			summary.className = invalid.length ? 'push115-validation-summary error' : 'push115-validation-summary'
+			summary.textContent = `有效 ${valid} · 重复 ${duplicates.length} · 非法 ${invalid.length}`
+			validation.appendChild(summary)
+			for (const row of [...invalid, ...duplicates]) {
+				const message = document.createElement('div')
+				message.className = `push115-validation-item ${row.status}`
+				message.textContent = rowLabel(row)
+				validation.appendChild(message)
+			}
+			confirm.disabled = valid === 0 || invalid.length > 0
+			confirm.textContent = valid > 1 ? `提交 ${valid} 个任务` : '提交下载任务'
+			warning.textContent = profileWarning(processorSelect.value, intents)
+			return rows
+		}
+
+		textarea.addEventListener('input', renderValidation)
+		processorSelect.addEventListener('change', renderValidation)
+		cancel.addEventListener('click', () => overlay.remove())
+		overlay.addEventListener('click', event => { if (event.target === overlay) overlay.remove() })
+		confirm.addEventListener('click', async () => {
+			const rows = renderValidation()
+			if (confirm.disabled) return
+			const selectedProfile = processorSelect.value
+			const savePathCid = pathUtils.normalizeCid(pathSelect.value) || currentCid
+			const template = intents[0] || {
+				sourceSite,
+				mediaType: 'generic',
+				title: '',
+				code: '',
+				metadata: { pageUrl: input.pageUrl || '' },
+			}
+			const queueItems = rows.filter(row => row.status === 'valid').map(row => {
+				const original = sourceByKey.get(row.key) || template
+				return {
+					key: `line-${row.line}`,
+					intent: intentApi.create({
+						...original,
+						url: row.url,
+						title: original.title || intentApi.extractDisplayName(row.url),
+						savePathCid,
+						processorProfile: selectedProfile,
+					}),
+				}
+			})
+			const duplicateItems = rows.filter(row => row.status === 'duplicate').map(row => ({
+				key: `duplicate-${row.line}`, title: row.url, url: row.url,
+			}))
+			const displayItems = [
+				...queueItems.map(item => ({ key: item.key, title: item.intent.title, url: item.intent.url })),
+				...duplicateItems,
+			]
+			overlay.remove()
+			const progress = new content.BatchProgress.BatchProgress(displayItems)
+			for (const item of duplicateItems) progress.update(item.key, 'duplicate', 'duplicate')
+			try {
+				const result = await global.Push115.SubmissionQueue.submit(queueItems, {
+					concurrency,
+					onStatus(entry, status) {
+						progress.update(entry.key, status, status === 'failed' ? (entry.error?.message || 'failed') : status)
+					},
+				})
+				result.duplicate += duplicateItems.length
+				progress.finish(result)
+				content.Feedback?.toast(result.failed ? 'warning' : 'success', `提交结束：成功 ${result.success}，失败 ${result.failed}，跳过重复 ${result.duplicate}`)
+			} catch (error) {
+				content.Feedback?.toast('error', `提交失败：${error?.message || error}`)
+			}
+		})
+		renderValidation()
+		textarea.focus()
+	}
+
+	content.ConfirmModal = { show }
+})(globalThis)

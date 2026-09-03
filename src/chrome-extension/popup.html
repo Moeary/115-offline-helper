@@ -4,7 +4,7 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>115 Offline Helper</title>
-		<link rel="stylesheet" href="popup.css" />
+		<link rel="stylesheet" href="ui/popup/popup.css" />
 	</head>
 	<body>
 		<div class="push115-panel" id="push115-panel">
@@ -44,6 +44,12 @@
 						<div class="push115-progress-track">
 							<div class="push115-progress-bar" id="push115-progress-bar"></div>
 						</div>
+					</div>
+
+					<div class="push115-section">
+						<label class="push115-label" id="label-manual-download" for="push115-manual-downloads">手动添加 Magnet / ED2K</label>
+						<textarea id="push115-manual-downloads" class="push115-textarea" rows="4" placeholder="每行一个 magnet: 或 ed2k:"></textarea>
+						<button class="push115-btn push115-btn-primary push115-btn-full" id="push115-open-download-confirmation" type="button">继续确认</button>
 					</div>
 
 					<div class="push115-section push115-task-section">
@@ -235,7 +241,15 @@
 			</div>
 		</div>
 
-		<script src="path-utils.js"></script>
-		<script src="popup.js"></script>
+		<script src="shared/config.js"></script>
+		<script src="shared/path-utils.js"></script>
+		<script src="shared/download-intent.js"></script>
+		<script src="shared/messaging.js"></script>
+		<script src="content/ui/styles.js"></script>
+		<script src="content/ui/feedback.js"></script>
+		<script src="content/ui/batch-progress.js"></script>
+		<script src="content/ui/submission-queue.js"></script>
+		<script src="content/ui/download-confirmation.js"></script>
+		<script src="ui/popup/index.js"></script>
 	</body>
 </html>

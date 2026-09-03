@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "115 Offline Helper",
-  "version": "1.0.1",
-  "description": "Automatically detect magnet/ed2k links and push to 115.com offline download.",
+  "version": "1.2.0",
+  "description": "Site-adapted magnet/ed2k submission and safe background processing for 115.com.",
   "permissions": [
     "storage",
     "cookies",
@@ -15,7 +15,12 @@
     "*://*.115.com/*"
   ],
   "optional_host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "*://javbus.com/*",
+    "*://*.javbus.com/*",
+    "*://nyaa.si/*",
+    "*://sukebei.nyaa.si/*",
+    "*://mikan.tangbai.cc/*"
   ],
   "action": {
     "default_title": "115 Offline Helper",
@@ -26,7 +31,7 @@
     "open_in_tab": true
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background/service-worker.js"
   },
   "icons": {
     "16": "icons/icon16.png",

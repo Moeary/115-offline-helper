@@ -16,6 +16,7 @@ const CONFIG_KEYS = {
 	CLEAN_EXTENSIONS: 'push115_clean_extensions',
 	CLEAN_IMAGES: 'push115_clean_images',
 	CLEAN_NFO: 'push115_clean_nfo',
+	SITE_PROFILES: 'push115_site_profiles',
 }
 
 const DEFAULT_CONFIG = {
@@ -38,6 +39,9 @@ const DEFAULT_CONFIG = {
 const I18N_STRINGS = {
 	'zh-CN': {
 		panel_title: '115离线助手',
+		manual_download_label: '手动添加 Magnet / ED2K',
+		manual_download_placeholder: '每行一个 magnet: 或 ed2k:',
+		manual_download_continue: '继续确认',
 		tab_home: '主页',
 		tab_settings: '设置',
 		save_path_label: '默认保存目录:',
@@ -83,6 +87,9 @@ const I18N_STRINGS = {
 	},
 	'en-US': {
 		panel_title: '115 Offline Helper',
+		manual_download_label: 'Add Magnet / ED2K manually',
+		manual_download_placeholder: 'One magnet: or ed2k: link per line',
+		manual_download_continue: 'Continue',
 		tab_home: 'Home',
 		tab_settings: 'Settings',
 		save_path_label: 'Default Save Directory:',
@@ -375,6 +382,9 @@ function applyTheme(theme) {
 function applyLocale() {
 	// Update all text elements
 	document.getElementById('push115-title-text').textContent = t('panel_title')
+	document.getElementById('label-manual-download').textContent = t('manual_download_label')
+	document.getElementById('push115-manual-downloads').placeholder = t('manual_download_placeholder')
+	document.getElementById('push115-open-download-confirmation').textContent = t('manual_download_continue')
 	document.querySelector('[data-tab="home"]').textContent = t('tab_home')
 	document.querySelector('[data-tab="tasks"]').textContent = t('tab_tasks')
 	document.querySelector('[data-tab="settings"]').textContent = t('tab_settings')
@@ -413,11 +423,11 @@ function getRootLabel() {
 
 function renderSaveDirSelect() {
 	const selectEl = document.getElementById('push115-save-dir-select')
-	if (!selectEl || !window.Push115PathUtils) return
+	if (!selectEl || !window.Push115?.PathUtils) return
 
-	const savedCid = Push115PathUtils.normalizeCid(getConfig(CONFIG_KEYS.SAVE_PATH_CID)) || '0'
+	const savedCid = Push115.PathUtils.normalizeCid(getConfig(CONFIG_KEYS.SAVE_PATH_CID)) || '0'
 	const listText = getConfig(CONFIG_KEYS.SAVE_PATH_LIST) || ''
-	const options = Push115PathUtils.buildPathOptions(listText, getRootLabel())
+	const options = Push115.PathUtils.buildPathOptions(listText, getRootLabel())
 	const hasSaved = options.some(item => item.cid === savedCid)
 
 	const allOptions = hasSaved ? options : [...options, { name: '', cid: savedCid }]
@@ -425,16 +435,21 @@ function renderSaveDirSelect() {
 	allOptions.forEach(item => {
 		const opt = document.createElement('option')
 		opt.value = item.cid
-		opt.textContent = Push115PathUtils.formatPathLabel(item, getRootLabel())
+		opt.textContent = Push115.PathUtils.formatPathLabel(item, getRootLabel())
 		if (item.cid === savedCid) opt.selected = true
 		selectEl.appendChild(opt)
 	})
 }
 
 async function init() {
+	Push115.Content.Styles.ensure()
 	// Load config
 	const items = await chrome.storage.local.get(null)
 	configCache = { ...DEFAULT_CONFIG, ...items }
+	configCache[CONFIG_KEYS.SITE_PROFILES] = Push115.Config.normalizeSiteProfiles(
+		items[CONFIG_KEYS.SITE_PROFILES],
+		configCache,
+	)
 
 	// Apply theme & locale
 	applyTheme(getConfig(CONFIG_KEYS.THEME))
@@ -474,6 +489,18 @@ function bindEvents() {
 		tab.addEventListener('click', () => activateTab(tab.dataset.tab))
 	})
 
+	document.getElementById('push115-open-download-confirmation').addEventListener('click', () => {
+		const initialText = document.getElementById('push115-manual-downloads').value
+		const genericProfile = configCache[CONFIG_KEYS.SITE_PROFILES]?.generic || {}
+		void Push115.Content.ConfirmModal.show({
+			initialText,
+			sourceSite: 'generic',
+			defaultProcessorProfile: genericProfile.defaultProcessorProfile || 'generic',
+			defaultSavePathCid: genericProfile.defaultSavePathCid || getConfig(CONFIG_KEYS.SAVE_PATH_CID),
+			batchConcurrency: 2,
+		})
+	})
+
 	// Theme
 	document.getElementById('push115-theme-select').addEventListener('change', e => {
 		setConfig(CONFIG_KEYS.THEME, e.target.value)
@@ -501,12 +528,18 @@ function bindEvents() {
 	document.getElementById('push115-auto-detect').addEventListener('change', async e => {
 		const checkbox = e.target
 		if (checkbox.checked) {
-			// Request <all_urls> permission
 			try {
 				const granted = await chrome.permissions.request({ origins: ['<all_urls>'] })
 				if (granted) {
-					setConfig(CONFIG_KEYS.AUTO_DETECT, true)
-					chrome.runtime.sendMessage({ action: 'REGISTER_CONTENT_SCRIPTS' })
+					const profiles = Push115.Config.normalizeSiteProfiles(getConfig(CONFIG_KEYS.SITE_PROFILES), configCache)
+					profiles.generic.enabled = true
+					configCache[CONFIG_KEYS.AUTO_DETECT] = true
+					configCache[CONFIG_KEYS.SITE_PROFILES] = profiles
+					await chrome.storage.local.set({
+						[CONFIG_KEYS.AUTO_DETECT]: true,
+						[CONFIG_KEYS.SITE_PROFILES]: profiles,
+					})
+					await sendMessage('SYNC_CONTENT_SCRIPTS')
 					showStatus('success', t('auto_detect_label') + ' ✓')
 				} else {
 					checkbox.checked = false
@@ -516,8 +549,15 @@ function bindEvents() {
 				checkbox.checked = false
 			}
 		} else {
-			setConfig(CONFIG_KEYS.AUTO_DETECT, false)
-			chrome.runtime.sendMessage({ action: 'UNREGISTER_CONTENT_SCRIPTS' })
+			const profiles = Push115.Config.normalizeSiteProfiles(getConfig(CONFIG_KEYS.SITE_PROFILES), configCache)
+			profiles.generic.enabled = false
+			configCache[CONFIG_KEYS.AUTO_DETECT] = false
+			configCache[CONFIG_KEYS.SITE_PROFILES] = profiles
+			await chrome.storage.local.set({
+				[CONFIG_KEYS.AUTO_DETECT]: false,
+				[CONFIG_KEYS.SITE_PROFILES]: profiles,
+			})
+			await sendMessage('SYNC_CONTENT_SCRIPTS')
 		}
 	})
 
@@ -533,9 +573,9 @@ function bindEvents() {
 
 	// Save directory
 	document.getElementById('push115-save-dir-select').addEventListener('change', e => {
-		const cid = Push115PathUtils.normalizeCid(e.target.value) || '0'
+		const cid = Push115.PathUtils.normalizeCid(e.target.value) || '0'
 		const listText = getConfig(CONFIG_KEYS.SAVE_PATH_LIST) || ''
-		const found = Push115PathUtils.findPathByCid(listText, cid)
+		const found = Push115.PathUtils.findPathByCid(listText, cid)
 		setConfig(CONFIG_KEYS.SAVE_PATH_CID, cid)
 		setConfig(CONFIG_KEYS.SAVE_PATH, cid === '0' ? '' : found?.name || '')
 		renderSaveDirSelect()

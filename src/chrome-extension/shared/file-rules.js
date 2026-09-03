@@ -295,7 +295,7 @@
     }));
   }
 
-  global.Push115FileRules = {
+  const api = {
     VIDEO_EXTENSIONS,
     IMAGE_EXTENSIONS,
     DEFAULT_JUNK_EXTENSIONS,
@@ -319,4 +319,6 @@
     getDeletionDecision,
     analyzeFiles,
   };
+  global.Push115 = global.Push115 || {};
+  global.Push115.FileRules = api;
 })(typeof globalThis !== 'undefined' ? globalThis : self);

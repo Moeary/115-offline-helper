@@ -4,7 +4,7 @@
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>115离线助手设置</title>
-		<link rel="stylesheet" href="options.css" />
+		<link rel="stylesheet" href="ui/options/options.css" />
 	</head>
 	<body>
 		<div class="push115-options-shell">
@@ -48,9 +48,9 @@
 
 						<div class="push115-field-grid">
 							<div class="push115-field">
-								<label for="push115-default-save-cid" data-i18n="save_cid_label">默认保存目录 CID</label>
-								<input id="push115-default-save-cid" type="text" inputmode="numeric" placeholder="0" />
-								<p class="push115-hint" data-i18n="save_cid_hint">根目录填 0；目录列表中的 CID 也可在弹窗主页选择。</p>
+								<label for="push115-default-save-cid" data-i18n="save_cid_label">默认保存目录</label>
+								<select id="push115-default-save-cid"></select>
+								<p class="push115-hint" data-i18n="save_cid_hint">目录选项来自“115 离线目录”列表；未配置时使用根目录。</p>
 							</div>
 							<div class="push115-field">
 								<label for="push115-delete-size" data-i18n="threshold_label">小视频阈值（MB）</label>
@@ -82,14 +82,15 @@
 									<small data-i18n="auto_organize_hint">优先使用页面番号整理任务文件夹、主视频和字幕。</small>
 								</span>
 							</label>
-							<label class="push115-toggle">
-								<input id="push115-auto-detect" type="checkbox" />
-								<span>
-									<strong data-i18n="auto_detect_label">自动识别链接</strong>
-									<small data-i18n="auto_detect_hint">在所有网页检测 magnet/ed2k，需要额外页面权限。</small>
-								</span>
-							</label>
 						</div>
+
+						<div class="push115-divider"></div>
+
+						<div class="push115-rule-heading">
+							<h3>站点增强</h3>
+							<p>每个站点独立控制启用状态、保存目录、页面增强方式与后台 processor；保存目录选项来自上方目录列表，首次启用会请求对应网页权限。</p>
+						</div>
+						<div id="push115-site-profiles" class="push115-site-profiles"></div>
 
 						<div class="push115-divider"></div>
 
@@ -147,7 +148,10 @@
 							<h2 data-i18n="logs_title">后台任务与日志</h2>
 							<p data-i18n="logs_subtitle">这里会保留最近任务的处理状态、错误和清理明细。</p>
 						</div>
-						<button class="push115-btn push115-btn-secondary" id="push115-refresh-logs" type="button" data-i18n="refresh_button">刷新</button>
+						<div class="push115-log-actions">
+							<button class="push115-btn push115-btn-secondary" id="push115-refresh-logs" type="button" data-i18n="refresh_button">刷新</button>
+							<button class="push115-btn push115-btn-danger" id="push115-clear-logs" type="button" data-i18n="clear_logs_button">清空日志</button>
+						</div>
 					</div>
 					<div id="push115-log-summary" class="push115-log-summary"></div>
 					<div id="push115-log-list" class="push115-log-list"></div>
@@ -155,6 +159,11 @@
 			</main>
 		</div>
 
-		<script src="options.js"></script>
+		<script src="shared/config.js"></script>
+		<script src="shared/path-utils.js"></script>
+		<script src="shared/messaging.js"></script>
+		<script src="ui/options/site-profiles.js"></script>
+		<script src="ui/options/tasks.js"></script>
+		<script src="ui/options/index.js"></script>
 	</body>
 </html>

@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.0.1-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.2.0-orange" alt="Version">
 </p>
 
 ---
@@ -22,8 +22,9 @@
 ## ✨ Features
 
 - 🔍 **Auto-detect links** — Detect magnet and ed2k links on any web page (opt-in)
-- 📋 **Clipboard support** — Paste links directly in the popup to push
-- 📥 **One-click push** — Push links to 115.com offline download queue instantly
+- 🧩 **Site adapters** — Profiles for Generic, JavBus, Nyaa/Sukebei, and Mikan; OpenBT uses Generic
+- 📺 **List batch submission** — Nyaa, Sukebei, and Mikan support selected/all submission, BTIH deduplication, bounded concurrency, and per-item progress
+- 📥 **Unified confirmation** — Page buttons, batches, and manual multi-line input share editable links, save directory, and processor selection
 - 📁 **Custom save directory** — Choose which 115 folder to save downloads to
 - 🗑️ **Safe junk cleanup** — Remove obvious HTML/TXT attachments and small ad videos; subtitles are protected and image/NFO cleanup is off by default
 - 📂 **Auto-organize videos** — Move video files into folders based on filename
@@ -98,9 +99,7 @@ After source changes, run `pixi run deploy` again and click **Reload** on the ex
 
 1. **Login** — Click the extension icon → **Scan to Login** → scan QR code with the 115 mobile app.
 2. **Set save directory** — Choose a folder from the dropdown on the Home tab, or add custom paths in Settings (`FolderName:CID` format).
-3. **Push links** — Two ways:
-   - **Popup**: Paste magnet/ed2k links into the input box and click **Push**.
-   - **Auto-detect**: Enable "Auto detect links" in Settings to detect links on any webpage with a one-click confirmation dialog.
+3. **Push links** — Generic adds buttons beside magnet/ed2k links; JavBus uses its page code; Nyaa, Sukebei, and Mikan support single and batch submission. OpenBT uses Generic.
 
 ### Settings
 
@@ -108,6 +107,9 @@ After source changes, run `pixi run deploy` again and click **Reload** on the ex
 |---------|-------------|
 | Save directory list | Add folders in `Name:CID` format, one per line |
 | Auto-detect links | Detect links on all pages via content script |
+| Site enhancements | Configure enabled state, default save directory (selected from the directory list), processor profile, and page controls for Generic, JavBus, Nyaa, Sukebei, and Mikan |
+| List batches | Nyaa, Sukebei, and Mikan default to concurrency 2; failures are isolated and every batch uses unified confirmation |
+| Log cleanup | Clear completed, failed, and recorded history from Settings; active tasks are retained |
 | Background task manager | Open the Task manager tab from Home to inspect logs and retry failures |
 | Junk extension rules | Edit junk, protected, and optional cleanup extensions in the full settings page |
 | Image/NFO cleanup | Off by default; enable it explicitly in the full settings page |
@@ -116,7 +118,7 @@ After source changes, run `pixi run deploy` again and click **Reload** on the ex
 
 > By default, `.url/.html/.htm/.txt/.exe/.bat/.cmd/.torrent` are treated as explicit junk, while `.srt/.ass/.ssa/.sup/.vtt` are protected. Image/poster and `.nfo` cleanup is disabled by default. If an extension appears in both lists, the protected list wins.
 
-> Click **Open full settings & logs** in the popup Settings tab to edit these rules and inspect recent task logs.
+> Each task carries an explicit `processorProfile`: `generic` performs safe cleanup only, `jav` may apply code-based renaming, and `anime` preserves torrent names and directories. The confirmation dialog can override every site's default.
 
 ## ❓ FAQ
 

@@ -15,6 +15,7 @@ const CONFIG_KEYS = {
 	CLEAN_EXTENSIONS: 'push115_clean_extensions',
 	CLEAN_IMAGES: 'push115_clean_images',
 	CLEAN_NFO: 'push115_clean_nfo',
+	SITE_PROFILES: 'push115_site_profiles',
 }
 
 const DEFAULT_CONFIG = {
@@ -45,8 +46,8 @@ const I18N_STRINGS = {
 		theme_auto: '跟随系统',
 		theme_light: '浅色',
 		theme_dark: '深色',
-		save_cid_label: '默认保存目录 CID',
-		save_cid_hint: '根目录填 0；目录列表中的 CID 也可在弹窗主页选择。',
+		save_cid_label: '默认保存目录',
+		save_cid_hint: '目录选项来自“115 离线目录”列表；未配置时使用根目录。',
 		threshold_label: '小视频阈值（MB）',
 		threshold_hint: '阈值只用于筛选；主视频、CD/Disc/Part 分片不会因体积小而删除。',
 		save_dirs_label: '115 离线目录（一行一个）',
@@ -81,6 +82,10 @@ const I18N_STRINGS = {
 		confirm_reset: '确定将本页设置恢复为默认值吗？',
 		logs_title: '后台任务与日志',
 		logs_subtitle: '这里会保留最近任务的处理状态、错误和清理明细。',
+		clear_logs_button: '清空日志',
+		confirm_clear_logs: '确定清空已完成、失败和已记录的历史日志吗？等待中或处理中的任务会保留。',
+		clear_logs_success: '日志已清空，保留 {count} 个进行中的任务。',
+		clear_logs_failed: '清空日志失败：',
 		refresh_button: '刷新',
 		logs_empty: '暂无后台任务日志',
 		logs_summary: '共 {count} 条任务记录',
@@ -105,8 +110,8 @@ const I18N_STRINGS = {
 		theme_auto: 'System',
 		theme_light: 'Light',
 		theme_dark: 'Dark',
-		save_cid_label: 'Default save directory CID',
-		save_cid_hint: 'Use 0 for the root; directories can also be selected from the popup home tab.',
+		save_cid_label: 'Default save directory',
+		save_cid_hint: 'Options come from the 115 offline directory list; the root is used when none is configured.',
 		threshold_label: 'Small-video threshold (MB)',
 		threshold_hint: 'This only filters candidates; the main video and CD/Disc/Part files are protected.',
 		save_dirs_label: '115 offline directories (one per line)',
@@ -141,6 +146,10 @@ const I18N_STRINGS = {
 		confirm_reset: 'Reset all settings on this page to their defaults?',
 		logs_title: 'Background tasks and logs',
 		logs_subtitle: 'Recent task states, errors, and cleanup details are shown here.',
+		clear_logs_button: 'Clear logs',
+		confirm_clear_logs: 'Clear completed, failed, and recorded history logs? Waiting or processing tasks will be kept.',
+		clear_logs_success: 'Logs cleared; {count} active task(s) retained.',
+		clear_logs_failed: 'Failed to clear logs: ',
 		refresh_button: 'Refresh',
 		logs_empty: 'No background task logs yet',
 		logs_summary: '{count} task records',
@@ -220,24 +229,53 @@ function applyLocale() {
 	})
 }
 
+function renderSavePathSelectors(preserveSiteProfiles = false, selectedCidOverride = undefined) {
+	const listText = document.getElementById('push115-save-dirs-input')?.value || ''
+	const rootLabel = getConfig(CONFIG_KEYS.I18N_LOCALE) === 'en-US' ? 'Root' : '根目录'
+	const select = document.getElementById('push115-default-save-cid')
+	if (select && window.Push115?.PathUtils) {
+		const selectedCid = Push115.PathUtils.normalizeCid(
+			selectedCidOverride ?? select.value ?? getConfig(CONFIG_KEYS.SAVE_PATH_CID),
+		) || '0'
+		const options = Push115.PathUtils.buildPathOptions(listText, rootLabel)
+		if (!options.some(item => item.cid === selectedCid)) options.push({ name: '', cid: selectedCid })
+		select.textContent = ''
+		for (const item of options) {
+			const option = document.createElement('option')
+			option.value = item.cid
+			option.textContent = Push115.PathUtils.formatPathLabel(item, rootLabel)
+			option.selected = item.cid === selectedCid
+			select.appendChild(option)
+		}
+	}
+	if (preserveSiteProfiles) {
+		const profiles = Push115.OptionsSiteProfiles.collect()
+		Push115.OptionsSiteProfiles.render(profiles, listText, rootLabel)
+	} else {
+		Push115.OptionsSiteProfiles.render(getConfig(CONFIG_KEYS.SITE_PROFILES), listText, rootLabel)
+	}
+}
+
 function fillForm() {
 	document.getElementById('push115-language-select').value = getConfig(CONFIG_KEYS.I18N_LOCALE)
 	document.getElementById('push115-theme-select').value = getConfig(CONFIG_KEYS.THEME)
-	document.getElementById('push115-default-save-cid').value = getConfig(CONFIG_KEYS.SAVE_PATH_CID)
 	document.getElementById('push115-delete-size').value = getConfig(CONFIG_KEYS.DELETE_SIZE_THRESHOLD)
 	document.getElementById('push115-save-dirs-input').value = getConfig(CONFIG_KEYS.SAVE_PATH_LIST)
 	document.getElementById('push115-auto-delete').checked = getConfig(CONFIG_KEYS.AUTO_DELETE_SMALL) === true
 	document.getElementById('push115-auto-organize').checked = getConfig(CONFIG_KEYS.AUTO_ORGANIZE) === true
-	document.getElementById('push115-auto-detect').checked = getConfig(CONFIG_KEYS.AUTO_DETECT) === true
+	const autoDetect = document.getElementById('push115-auto-detect')
+	if (autoDetect) autoDetect.checked = getConfig(CONFIG_KEYS.AUTO_DETECT) === true
 	document.getElementById('push115-junk-extensions').value = getConfig(CONFIG_KEYS.JUNK_EXTENSIONS)
 	document.getElementById('push115-preserve-extensions').value = getConfig(CONFIG_KEYS.PRESERVE_EXTENSIONS)
 	document.getElementById('push115-clean-extensions').value = getConfig(CONFIG_KEYS.CLEAN_EXTENSIONS)
 	document.getElementById('push115-clean-images').checked = getConfig(CONFIG_KEYS.CLEAN_IMAGES) === true
 	document.getElementById('push115-clean-nfo').checked = getConfig(CONFIG_KEYS.CLEAN_NFO) === true
+	renderSavePathSelectors(false, getConfig(CONFIG_KEYS.SAVE_PATH_CID))
 }
 
 function collectFormConfig() {
 	const threshold = Number(document.getElementById('push115-delete-size').value)
+	const siteProfiles = Push115.OptionsSiteProfiles.collect()
 	return {
 		[CONFIG_KEYS.SAVE_PATH]: getConfig(CONFIG_KEYS.SAVE_PATH) || '',
 		[CONFIG_KEYS.SAVE_PATH_CID]: normalizeCid(document.getElementById('push115-default-save-cid').value),
@@ -245,7 +283,7 @@ function collectFormConfig() {
 		[CONFIG_KEYS.AUTO_DELETE_SMALL]: document.getElementById('push115-auto-delete').checked,
 		[CONFIG_KEYS.DELETE_SIZE_THRESHOLD]: Number.isFinite(threshold) && threshold > 0 ? Math.round(threshold) : 100,
 		[CONFIG_KEYS.AUTO_ORGANIZE]: document.getElementById('push115-auto-organize').checked,
-		[CONFIG_KEYS.AUTO_DETECT]: document.getElementById('push115-auto-detect').checked,
+		[CONFIG_KEYS.AUTO_DETECT]: siteProfiles.generic.enabled,
 		[CONFIG_KEYS.I18N_LOCALE]: document.getElementById('push115-language-select').value || 'zh-CN',
 		[CONFIG_KEYS.THEME]: document.getElementById('push115-theme-select').value || 'auto',
 		[CONFIG_KEYS.JUNK_EXTENSIONS]: normalizeExtensionText(document.getElementById('push115-junk-extensions').value),
@@ -253,6 +291,7 @@ function collectFormConfig() {
 		[CONFIG_KEYS.CLEAN_EXTENSIONS]: normalizeExtensionText(document.getElementById('push115-clean-extensions').value),
 		[CONFIG_KEYS.CLEAN_IMAGES]: document.getElementById('push115-clean-images').checked,
 		[CONFIG_KEYS.CLEAN_NFO]: document.getElementById('push115-clean-nfo').checked,
+		[CONFIG_KEYS.SITE_PROFILES]: siteProfiles,
 	}
 }
 
@@ -262,14 +301,13 @@ function showSettingsStatus(type, message) {
 	area.textContent = message || ''
 }
 
-async function updateContentScriptState(autoDetect) {
-	if (autoDetect) {
-		let granted = await chrome.permissions.contains({ origins: ['<all_urls>'] })
-		if (!granted) granted = await chrome.permissions.request({ origins: ['<all_urls>'] })
-		if (!granted) throw new Error(t('permission_denied'))
-		await sendMessage('REGISTER_CONTENT_SCRIPTS')
-	} else {
-		await sendMessage('UNREGISTER_CONTENT_SCRIPTS')
+async function requestContentScriptPermissions(siteProfiles) {
+	for (const [siteId, definition] of Object.entries(Push115.Config.SITE_DEFINITIONS)) {
+		if (!siteProfiles[siteId]?.enabled) continue
+		const origins = [...definition.matches]
+		let granted = await chrome.permissions.contains({ origins })
+		if (!granted) granted = await chrome.permissions.request({ origins })
+		if (!granted) throw new Error(`${definition.label}: ${t('permission_denied')}`)
 	}
 }
 
@@ -278,18 +316,20 @@ async function saveSettings(event) {
 	const button = document.getElementById('push115-save-settings')
 	button.disabled = true
 	try {
+		// The directory textarea may still be focused when the form is submitted.
+		// Rebuild the selects once so a newly entered Name:CID line is available to
+		// both the global default and every site profile before collecting values.
+		renderSavePathSelectors(true)
 		const nextConfig = collectFormConfig()
-		await updateContentScriptState(nextConfig[CONFIG_KEYS.AUTO_DETECT])
+		await requestContentScriptPermissions(nextConfig[CONFIG_KEYS.SITE_PROFILES])
 		await chrome.storage.local.set(nextConfig)
+		await sendMessage('SYNC_CONTENT_SCRIPTS')
 		configCache = { ...configCache, ...nextConfig }
 		applyTheme(getConfig(CONFIG_KEYS.THEME))
 		applyLocale()
 		fillForm()
 		showSettingsStatus('success', t('save_success'))
 	} catch (error) {
-		if (error?.message === t('permission_denied')) {
-			document.getElementById('push115-auto-detect').checked = false
-		}
 		showSettingsStatus('error', t('save_failed') + (error?.message || error))
 	} finally {
 		button.disabled = false
@@ -301,9 +341,13 @@ async function resetSettings() {
 	const button = document.getElementById('push115-reset-settings')
 	button.disabled = true
 	try {
-		await updateContentScriptState(false)
-		await chrome.storage.local.set({ ...DEFAULT_CONFIG })
-		configCache = { ...configCache, ...DEFAULT_CONFIG }
+		const resetConfig = {
+			...DEFAULT_CONFIG,
+			[CONFIG_KEYS.SITE_PROFILES]: Push115.Config.normalizeSiteProfiles({}, DEFAULT_CONFIG),
+		}
+		await chrome.storage.local.set(resetConfig)
+		await sendMessage('SYNC_CONTENT_SCRIPTS')
+		configCache = { ...configCache, ...resetConfig }
 		applyTheme(getConfig(CONFIG_KEYS.THEME))
 		applyLocale()
 		fillForm()
@@ -315,127 +359,12 @@ async function resetSettings() {
 	}
 }
 
-function getTaskStatusLabel(status) {
-	return t(`task_status_${status}`) || status || t('task_status_recorded')
-}
-
-function getTaskDisplayName(task) {
-	return task.code || task.remoteName || task.title || task.magnet || '115 task'
-}
-
-function formatTime(value) {
-	const timestamp = Number(value)
-	if (!Number.isFinite(timestamp) || timestamp <= 0) return '--'
-	return new Date(timestamp).toLocaleString(getConfig(CONFIG_KEYS.I18N_LOCALE) || 'zh-CN', { hour12: false })
-}
-
-function appendTaskLogs(parent, task) {
-	const logs = Array.isArray(task.logs) ? task.logs : []
-	const details = document.createElement('details')
-	details.className = 'push115-task-logs'
-	details.open = task.status === 'failed' || task.status === 'processing'
-	const summary = document.createElement('summary')
-	summary.textContent = `${t('logs_label')} (${logs.length})`
-	details.appendChild(summary)
-
-	if (logs.length === 0) {
-		const empty = document.createElement('div')
-		empty.className = 'push115-log-entry'
-		empty.textContent = t('task_meta_empty')
-		details.appendChild(empty)
-	} else {
-		for (const log of logs.slice(-60)) {
-			const entry = document.createElement('div')
-			entry.className = 'push115-log-entry'
-			const time = document.createElement('time')
-			time.textContent = formatTime(log.at)
-			const message = document.createElement('span')
-			message.textContent = log.message || ''
-			entry.append(time, message)
-			details.appendChild(entry)
-		}
-	}
-
-	parent.appendChild(details)
-}
-
-function renderTasks(tasks = []) {
-	const list = document.getElementById('push115-log-list')
-	const summary = document.getElementById('push115-log-summary')
-	const ordered = [...tasks].sort((left, right) => (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0))
-	summary.textContent = replaceCount(t('logs_summary'), ordered.length)
-	list.textContent = ''
-
-	if (ordered.length === 0) {
-		const empty = document.createElement('div')
-		empty.className = 'push115-log-empty'
-		empty.textContent = t('logs_empty')
-		list.appendChild(empty)
-		return
-	}
-
-	for (const task of ordered) {
-		const status = ['waiting', 'processing', 'recorded', 'completed', 'failed'].includes(task.status) ? task.status : 'recorded'
-		const card = document.createElement('article')
-		card.className = `push115-task-card ${status}`
-
-		const header = document.createElement('div')
-		header.className = 'push115-task-card-header'
-		const title = document.createElement('div')
-		title.className = 'push115-task-card-title'
-		title.textContent = getTaskDisplayName(task)
-		const statusEl = document.createElement('span')
-		statusEl.className = 'push115-task-card-status'
-		statusEl.textContent = getTaskStatusLabel(status)
-		header.append(title, statusEl)
-		card.appendChild(header)
-
-		const meta = document.createElement('div')
-		meta.className = 'push115-task-card-meta'
-		const metaParts = [task.title, task.source, task.message, formatTime(task.updatedAt || task.createdAt)].filter(Boolean)
-		meta.textContent = metaParts.length > 0 ? metaParts.join(' · ') : t('task_meta_empty')
-		card.appendChild(meta)
-
-		if (status === 'failed') {
-			const actions = document.createElement('div')
-			actions.className = 'push115-task-card-actions'
-			const retry = document.createElement('button')
-			retry.className = 'push115-task-retry'
-			retry.type = 'button'
-			retry.textContent = t('task_retry')
-			retry.addEventListener('click', async () => {
-				retry.disabled = true
-				try {
-					await sendMessage('RETRY_TASK', { taskId: task.taskId })
-					await refreshTasks()
-				} catch (error) {
-					showSettingsStatus('error', t('task_retry_failed') + (error?.message || error))
-					retry.disabled = false
-				}
-			})
-			actions.appendChild(retry)
-			card.appendChild(actions)
-		}
-
-		appendTaskLogs(card, task)
-		list.appendChild(card)
-	}
-}
-
-async function refreshTasks() {
-	try {
-		const response = await sendMessage('GET_TASKS')
-		renderTasks(response.tasks || [])
-	} catch (error) {
-		const summary = document.getElementById('push115-log-summary')
-		summary.textContent = t('refresh_failed') + (error?.message || error)
-	}
-}
-
 function bindEvents() {
 	document.getElementById('push115-settings-form').addEventListener('submit', saveSettings)
 	document.getElementById('push115-reset-settings').addEventListener('click', resetSettings)
-	document.getElementById('push115-refresh-logs').addEventListener('click', refreshTasks)
+	document.getElementById('push115-save-dirs-input').addEventListener('change', () => renderSavePathSelectors(true))
+	document.getElementById('push115-refresh-logs').addEventListener('click', Push115.OptionsTasks.refresh)
+	document.getElementById('push115-clear-logs').addEventListener('click', Push115.OptionsTasks.clearLogs)
 	document.getElementById('push115-language-select').addEventListener('change', event => {
 		configCache[CONFIG_KEYS.I18N_LOCALE] = event.target.value
 		applyLocale()
@@ -446,7 +375,7 @@ function bindEvents() {
 	})
 
 	chrome.runtime.onMessage.addListener(request => {
-		if (request?.action === 'TASK_UPDATED') void refreshTasks()
+		if (request?.action === 'TASK_UPDATED') void Push115.OptionsTasks.refresh()
 	})
 
 	chrome.storage.onChanged.addListener((changes, area) => {
@@ -468,12 +397,16 @@ function bindEvents() {
 async function init() {
 	const items = await chrome.storage.local.get(DEFAULT_CONFIG)
 	configCache = { ...DEFAULT_CONFIG, ...items }
+	configCache[CONFIG_KEYS.SITE_PROFILES] = Push115.Config.normalizeSiteProfiles(
+		items[CONFIG_KEYS.SITE_PROFILES],
+		configCache,
+	)
 	applyTheme(getConfig(CONFIG_KEYS.THEME))
 	applyLocale()
 	fillForm()
 	bindEvents()
-	await refreshTasks()
-	setInterval(refreshTasks, 5000)
+	await Push115.OptionsTasks.refresh()
+	setInterval(Push115.OptionsTasks.refresh, 5000)
 }
 
 void init()

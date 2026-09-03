@@ -1,4 +1,4 @@
-/* Full settings and background log page */
+/* Full settings, site profiles, and background log page */
 
 :root {
 	font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
@@ -172,6 +172,55 @@ h3 {
 	background: rgba(20, 33, 61, 0.09);
 }
 
+.push115-site-profiles {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+}
+
+.push115-site-profile {
+	display: grid;
+	gap: 9px;
+	padding: 13px;
+	border: 1px solid rgba(20, 33, 61, 0.1);
+	border-radius: 11px;
+	background: #fbfcfe;
+}
+
+.push115-site-profile-heading {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+}
+
+.push115-site-profile-heading input,
+.push115-site-field input[type="checkbox"] {
+	width: 17px;
+	height: 17px;
+	accent-color: #007aff;
+}
+
+.push115-site-field {
+	display: grid;
+	grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1.2fr);
+	align-items: center;
+	gap: 8px;
+	font-size: 11px;
+	color: #666b74;
+}
+
+.push115-site-field input:not([type="checkbox"]),
+.push115-site-field select {
+	min-width: 0;
+	height: 32px;
+	padding: 0 8px;
+	border: 1px solid rgba(20, 33, 61, 0.14);
+	border-radius: 7px;
+	background: #fff;
+	color: #1d1d1f;
+}
+
 .push115-toggle-grid {
 	display: grid;
 	grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -268,6 +317,15 @@ h3 {
 	background: rgba(0, 122, 255, 0.16);
 }
 
+.push115-btn-danger {
+	background: rgba(255, 59, 48, 0.12);
+	color: #c62828;
+}
+
+.push115-btn-danger:hover {
+	background: rgba(255, 59, 48, 0.2);
+}
+
 .push115-status {
 	min-height: 0;
 	margin-top: 10px;
@@ -297,6 +355,13 @@ h3 {
 .push115-log-heading {
 	align-items: center;
 	margin-bottom: 12px;
+}
+
+.push115-log-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 8px;
 }
 
 .push115-log-summary {

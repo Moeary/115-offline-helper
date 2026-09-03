@@ -13,7 +13,7 @@ pixi run deploy
 pixi run clean
 ```
 
-`pixi run deploy` 会先校验 Manifest V3 和图标、popup、service worker 等入口，再将源码复制到 `dist/extension/`，最后按根目录 `config.toml` 中 `[browser] chrome` 的路径打开 `chrome://extensions/`，并请求 Chrome 加载编译产物。
+`pixi run deploy` 会先校验 Manifest V3、图标、popup/options、service worker 的 `importScripts`、HTML 资源和关键模块入口，再将源码复制到 `dist/extension/`，最后按根目录 `config.toml` 中 `[browser] chrome` 的路径打开 `chrome://extensions/`，并请求 Chrome 加载编译产物。
 
 如果 Chrome 已经在运行，Chrome 可能忽略本次启动参数。首次安装时请在扩展页开启“开发者模式”，点击“加载已解压的扩展”，选择：
 
@@ -27,7 +27,11 @@ dist/extension
 
 ```text
 src/
-├─ chrome-extension/   MV3 扩展源码
+├─ chrome-extension/
+│  ├─ shared/          配置、DownloadIntent 与通用规则
+│  ├─ content/         Site Adapter、统一下载确认与批量提交队列
+│  ├─ background/      115 API、持久任务与 generic/jav/anime processors
+│  └─ ui/              popup 手工输入与 options 站点配置
 └─ README.md           开发说明
 scripts/
 ├─ build.py            校验并复制扩展到 dist/
