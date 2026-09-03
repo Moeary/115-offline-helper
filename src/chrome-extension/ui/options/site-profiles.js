@@ -1,12 +1,7 @@
 ;(function (global) {
 	'use strict'
 	const definitions = global.Push115.Config.SITE_DEFINITIONS
-	const processorOptions = [
-		['generic', 'Generic（安全清理，不重命名）'],
-		['jav', 'JAV（按番号整理）'],
-		['anime', 'Anime（保留原名）'],
-		['anime_mikan', 'Anime · Mikan（按番组归拢）'],
-	]
+	const processorOptions = [['generic', 'Generic（安全清理，不重命名）'], ['jav', 'JAV（按番号整理）'], ['anime', 'Anime（保留原名）']]
 	const listSites = new Set(['nyaa', 'sukebei', 'mikan'])
 
 	function pathOptions(rawPathList, selectedCid, rootLabel = '根目录') {

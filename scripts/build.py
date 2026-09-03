@@ -19,7 +19,6 @@ EXTENSION_DIST = DIST / "extension"
 REQUIRED_ARCHITECTURE_ENTRIES = (
     "shared/config.js",
     "shared/download-intent.js",
-    "shared/anime-utils.js",
     "shared/path-utils.js",
     "shared/file-rules.js",
     "content/bootstrap.js",
@@ -38,7 +37,6 @@ REQUIRED_ARCHITECTURE_ENTRIES = (
     "background/tasks/monitor.js",
     "background/processors/generic.js",
     "background/processors/anime.js",
-    "background/processors/anime-mikan.js",
     "background/processors/jav.js",
     "ui/popup/index.js",
     "ui/options/index.js",

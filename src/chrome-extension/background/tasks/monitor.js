@@ -62,9 +62,10 @@
 		])
 	}
 
-	function processorNeedsWork(profile, config) {
-		// Mikan 的番组归拢是 profile 自身的职责，不依赖全局“自动整理”开关。
-		if (profile === 'anime_mikan') return true
+	function processorNeedsWork(profile, config, task = null) {
+		// 批量 anime 需要在下载完成后把各任务目录扁平化到同一保存目录，
+		// 即使用户关闭了常规垃圾清理，也必须保留这项明确的批量整理。
+		if (profile === 'anime' && task?.metadata?.batchId) return true
 		if (profile === 'jav') return config.push115_auto_delete_small === true || config.push115_auto_organize === true
 		return ['generic', 'anime'].includes(profile) && config.push115_auto_delete_small === true
 	}
@@ -80,7 +81,7 @@
 		const config = await getConfigSnapshot()
 		const profile = normalizeProcessorProfile(task.processorProfile, task.mediaType === 'anime' ? 'anime' : task.code ? 'jav' : 'generic')
 		task.processorProfile = profile
-		if (!processorNeedsWork(profile, config)) {
+		if (!processorNeedsWork(profile, config, task)) {
 			task.status = 'recorded'
 			task.message = '已记录任务；对应后处理未开启'
 			task.updatedAt = Date.now()

@@ -10,7 +10,10 @@
 			STORAGE_KEYS.AUTO_DELETE_SMALL,
 			STORAGE_KEYS.AUTO_ORGANIZE,
 		])
-		const monitor = intent.processorProfile === 'anime_mikan'
+		const isAnimeBatch = intent.mediaType === 'anime'
+			&& intent.processorProfile === 'anime'
+			&& Boolean(intent.metadata?.batchId)
+		const monitor = isAnimeBatch
 			? true
 			: intent.processorProfile === 'jav'
 			? config[STORAGE_KEYS.AUTO_DELETE_SMALL] === true || config[STORAGE_KEYS.AUTO_ORGANIZE] === true

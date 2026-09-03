@@ -6,7 +6,7 @@
 
 ```text
 chrome-extension/
-├─ shared/                         配置迁移、DownloadIntent、Anime 元数据、消息、目录与文件规则
+├─ shared/                         配置迁移、DownloadIntent、消息、目录与文件规则
 ├─ content/
 │  ├─ bootstrap.js                轻量 Adapter 分发与节流后的动态页面刷新
 │  ├─ runtime-generic.js / runtime-sites.js  动态注册脚本的运行模式标记
@@ -24,7 +24,7 @@ chrome-extension/
 ├─ background/
 │  ├─ api/                        Cookie、HTTP、115 离线与文件 API
 │  ├─ tasks/                      持久任务记录与 alarm 监控
-│  ├─ processors/                 cleanup、generic、anime、anime_mikan、jav
+│  ├─ processors/                 cleanup、generic、jav、anime
 │  ├─ content-scripts.js          按权限和站点 profile 动态注册
 │  ├─ router.js                   消息与 DownloadIntent 提交入口
 │  └─ service-worker.js           MV3 service worker 装配入口
@@ -40,17 +40,16 @@ chrome-extension/
 
 Adapter 只提供 `matches(location)`、`extractPageMetadata()`、`discoverDownloads()`、`enhancePage()` 与 `getDefaultProcessorProfile()`。`intent-factory.js` 统一生成包含 `sourceSite`、`mediaType`、`url`、`title`、`code`、`metadata`、`savePathCid`、`processorProfile` 的 DownloadIntent；Adapter 不调用 115 API。
 
-所有页面单发、Nyaa/Sukebei/Mikan 批量和 popup 手工输入都会进入同一个确认 UI。确认层会 trim、去空行、按 BTIH 或完整链接去重并标记非法行；用户可把网站默认规则改为 `generic`、`jav`、`anime` 或 `anime_mikan`。提交层默认并发 2，逐项失败不会终止批次。
+所有页面单发、Nyaa/Sukebei/Mikan 批量和 popup 手工输入都会进入同一个确认 UI。确认层会 trim、去空行、按 BTIH 或完整链接去重并标记非法行；用户可把网站默认规则改为 `generic`、`jav` 或 `anime`。提交层默认并发 2，逐项失败不会终止批次；一次确认窗口内的多条任务会携带同一个 `metadata.batchId`，供 anime 后处理识别批量扁平化范围。
 
 - `generic`：通用安全清理，不按番号重命名。
 - `jav`：安全清理后，页面番号优先，最大主视频、字幕和任务文件夹按番号整理。
-- `anime`：通用安全清理，保留 torrent 原始文件名与目录结构。
-- `anime_mikan`：仅接受明确的 Mikan `/Home/Bangumi/<id>` 元数据；按番名创建目录，单集使用 `番名.ext`，多集使用 `番名_集号.ext`，字幕跟随集号；无法识别集号时只归拢、不强制改名。
+- `anime`：单条任务通用安全清理并保留 torrent 原始文件名与目录结构；同一确认窗口的批量任务会在完成后将视频/字幕移到所选保存目录，确认源目录为空后再删除任务文件夹，不做番号或番名强制改名。
 
 ## 页面结构校验记录（2026-09-02）
 
 - Nyaa/Sukebei：两站由同一套 Nyaa 模板生成。当前官方模板确认列表为 `table.torrent-list > tbody > tr`；标题链接位于第二个 `td` 的 `/view/` 链接；Magnet 位于链接操作单元格，Adapter 先使用 `td:nth-child(3) a[href^="magnet:"]`，再以行内 Magnet 兜底。页面为服务端渲染，翻页会重新加载文档。
-- Mikan：当前番组详情页可见“番组名 / 大小 / 更新时间 / 下载 / 播放”资源表和逐行“复制磁连”。Adapter 读取 `table.table-striped`（部分主题为 `table.table-stripped`）下的 `tbody tr`，从 `.magnet-link-wrap`/资源链接取得标题，并从 `a.js-magnet`、`data-clipboard-text` 或 `input.js-episode-select[data-magnet]` 取得磁链；异步展开的新增行由节流 `MutationObserver` 补强。
+- Mikan：当前番组详情页可见“番组名 / 大小 / 更新时间 / 下载 / 播放”资源表和逐行“复制磁连”。既有稳定实现继续读取 `.js-magnet` 及其 `href`、`data-clipboard-text`、`data-magnet`、`data-url`，并从最近的 `tr`/资源项取得标题；异步展开的新增行由节流 `MutationObserver` 补强。
 - JavBus：保留现有 `#magnet-table`、`.magnet-name` 与 Magnet href 读取；番号先取 URL 最后一个路径段，再退回标题和信息区。
 - OpenBT：没有专用 Adapter 或 Site Profile；无论页面结构如何，都只由 Generic 查找标准 Magnet/ED2K href。
 

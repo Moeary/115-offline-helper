@@ -71,14 +71,13 @@
 		mikan: Object.freeze({
 			enabled: true,
 			defaultSavePathCid: '0',
-			// Mikan 番组详情页携带稳定的番组 URL，可安全使用专用归拢规则。
-			defaultProcessorProfile: 'anime_mikan',
+			defaultProcessorProfile: 'anime',
 			inlineSendButton: true,
 			batchSelection: true,
 			batchConcurrency: 2,
 		}),
 	})
-	const PROCESSOR_PROFILES = Object.freeze(['generic', 'jav', 'anime', 'anime_mikan'])
+	const PROCESSOR_PROFILES = Object.freeze(['generic', 'jav', 'anime'])
 
 	const DEFAULT_CONFIG = Object.freeze({
 		[STORAGE_KEYS.SAVE_PATH]: '',
@@ -105,7 +104,6 @@
 	function normalizeProcessorProfile(value, fallback = 'generic') {
 		const profile = String(value || '').trim().toLowerCase()
 		if (PROCESSOR_PROFILES.includes(profile)) return profile
-		if (profile === 'anime-mikan' || profile === 'mikan-anime') return 'anime_mikan'
 		// 1.1.0 used "default" for safe cleanup and "none" for Mikan.
 		if (profile === 'default') return 'generic'
 		if (profile === 'none') return fallback === 'anime' ? 'anime' : 'generic'

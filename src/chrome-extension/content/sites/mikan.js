@@ -2,89 +2,38 @@
 	'use strict'
 	const adapters = global.Push115.SiteAdapters = global.Push115.SiteAdapters || {}
 	const SITE_ID = 'mikan'
-	const animeUtils = global.Push115.AnimeUtils
 
 	function matches(currentLocation = location) {
 		return currentLocation.hostname === 'mikan.tangbai.cc'
 	}
 
 	function extractPageMetadata() {
-		const heading = document.querySelector('.bangumi-title, .bangumi-info h1, .bangumi-info .title, main h1, h1')
-		const title = (heading?.textContent || document.querySelector('meta[property="og:title"]')?.content || document.title)
-			.replace(/\s*[-|｜]\s*Mikan Project.*$/i, '')
-			.trim()
-		const bangumiId = location.pathname.match(/\/Bangumi\/(\d+)/i)?.[1] || ''
-		const detail = Boolean(animeUtils?.isMikanBangumiUrl(location.href))
-		const canonicalUrl = detail ? `${location.origin}${location.pathname.replace(/\/+$/, '')}` : ''
-		return {
-			title,
-			seriesTitle: title,
-			animeTitle: title,
-			code: '',
-			pageCode: '',
-			pageUrl: location.href,
-			mikanBangumiUrl: canonicalUrl,
-			mikanDetail: detail,
-			bangumiId,
-			seriesKey: animeUtils?.seriesKey({ mikanBangumiUrl: canonicalUrl, bangumiId, seriesTitle: title }) || '',
-		}
+		const heading = document.querySelector('.bangumi-title, .bangumi-info h1, main h1, h1')
+		const title = (heading?.textContent || document.querySelector('meta[property="og:title"]')?.content || document.title).trim()
+		return { title, code: '', pageCode: '', pageUrl: location.href, bangumiId: location.pathname.match(/\/Bangumi\/(\d+)/i)?.[1] || '' }
 	}
 
 	function magnetFrom(element) {
-		for (const attribute of ['href', 'data-clipboard-text', 'data-magnet', 'data-magnet-link', 'data-url']) {
+		for (const attribute of ['href', 'data-clipboard-text', 'data-magnet', 'data-url']) {
 			const value = element.getAttribute(attribute)
-			if (/^magnet:/i.test(value || '')) return value.trim()
+			if (value?.startsWith('magnet:')) return value
 		}
 		return (element.getAttribute('onclick') || '').match(/magnet:\?[^'"\s)]+/i)?.[0] || ''
 	}
 
 	function discoverDownloads() {
-		// Mikan 番组详情页核对过的稳定结构：table.table-striped（部分主题为
-		// table.table-stripped）tbody tr；标题在 .magnet-link-wrap 或资源链接，
-		// 磁链由 a.js-magnet/data-clipboard-text 或 input.js-episode-select[data-magnet] 提供。
-		const selector = [
-			'table.table-striped tbody tr a.js-magnet',
-			'table.table-stripped tbody tr a.js-magnet',
-			'a.js-magnet',
-			'a[href^="magnet:"]',
-			'[data-clipboard-text]',
-			'input.js-episode-select[data-magnet]',
-			'input[data-magnet]',
-			'[data-magnet-link]',
-			'[data-url^="magnet:"]',
-			'[onclick*="magnet:"]',
-		].join(', ')
+		const selector = 'a[href^="magnet:"], .js-magnet, [data-clipboard-text^="magnet:"], [data-magnet^="magnet:"], [data-url^="magnet:"], [onclick*="magnet:"]'
 		const unique = new Map()
 		for (const sourceElement of document.querySelectorAll(selector)) {
 			const url = magnetFrom(sourceElement)
 			const btih = global.Push115.DownloadIntent.extractBtih(url)
 			if (!url || !btih) continue
-			const row = sourceElement.closest('table.table-striped tbody tr, table.table-stripped tbody tr, tr, .episode-item, .torrent-item, article') || sourceElement.parentElement
+			const row = sourceElement.closest('tr, .episode-item, .torrent-item, article') || sourceElement.parentElement
 			const titleElement = row?.querySelector('.magnet-link-wrap, .an-text, .episode-title, .torrent-title, a[target="_blank"], td:nth-child(1) a, td:nth-child(2) a')
-			const title = (titleElement?.textContent || sourceElement.getAttribute('title') || row?.textContent || document.title)
-				.replace(/\s*\[复制磁(?:连|链)\]\s*$/i, '')
-				.trim()
-			const page = extractPageMetadata()
+			const title = (titleElement?.textContent || sourceElement.getAttribute('title') || row?.textContent || document.title).trim()
 			const existing = unique.get(btih)
 			if (!existing) {
-				unique.set(btih, {
-					key: btih,
-					btih,
-					element: row,
-					sourceElement,
-					url,
-					title,
-					metadata: {
-						btih,
-						episode: animeUtils?.extractEpisodeLabel(title),
-						seriesTitle: page.seriesTitle || page.title,
-						animeTitle: page.animeTitle || page.title,
-						mikanDetail: page.mikanDetail === true,
-						mikanBangumiUrl: page.mikanBangumiUrl || '',
-						bangumiId: page.bangumiId || '',
-						seriesKey: page.seriesKey || '',
-					},
-				})
+				unique.set(btih, { key: btih, btih, element: row, sourceElement, url, title, metadata: { btih } })
 			} else if (existing.sourceElement.matches('input') && !sourceElement.matches('input')) {
 				existing.sourceElement = sourceElement
 			}
@@ -93,11 +42,7 @@
 	}
 
 	function getDefaultProcessorProfile() {
-		const configured = global.Push115.Content.getProfile(SITE_ID)?.defaultProcessorProfile || 'anime_mikan'
-		// The dedicated organizer is meaningful only on a concrete /Home/Bangumi/N
-		// page.  Mikan search/list pages retain the conservative Anime profile.
-		if (configured === 'anime_mikan' && !animeUtils?.isMikanBangumiUrl(location.href)) return 'anime'
-		return configured
+		return global.Push115.Content.getProfile(SITE_ID)?.defaultProcessorProfile || 'anime'
 	}
 
 	function selectedDownloads() {
@@ -108,7 +53,7 @@
 	function addRowControls(download) {
 		const profile = global.Push115.Content.getProfile(SITE_ID)
 		if (profile.batchSelection !== false && !download.element?.querySelector(`.push115-row-check[data-key="${download.btih}"]`)) {
-			const nativeCheckbox = download.element?.querySelector('input.js-episode-select[data-magnet], input[data-magnet]')
+			const nativeCheckbox = download.element?.querySelector('input[data-magnet^="magnet:"]')
 			const checkbox = nativeCheckbox || document.createElement('input')
 			checkbox.type = 'checkbox'
 			checkbox.classList.add('push115-row-check')
@@ -121,9 +66,7 @@
 				cell?.insertBefore(checkbox, cell.firstChild)
 			}
 		}
-		const inlineButtonExists = download.element?.querySelector(`.push115-inline-btn[data-key="${download.btih}"]`) ||
-			download.sourceElement.parentElement?.querySelector(`.push115-inline-btn[data-key="${download.btih}"]`)
-		if (profile.inlineSendButton !== false && !inlineButtonExists) {
+		if (profile.inlineSendButton !== false && !download.sourceElement.parentElement?.querySelector(`.push115-inline-btn[data-key="${download.btih}"]`)) {
 			const button = document.createElement('button')
 			button.type = 'button'
 			button.className = 'push115-inline-btn'

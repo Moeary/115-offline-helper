@@ -9,7 +9,6 @@
 		'shared/config.js',
 		'shared/path-utils.js',
 		'shared/download-intent.js',
-		'shared/anime-utils.js',
 		'shared/messaging.js',
 		'content/ui/styles.js',
 		'content/ui/feedback.js',
