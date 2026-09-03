@@ -10,7 +10,9 @@
 			STORAGE_KEYS.AUTO_DELETE_SMALL,
 			STORAGE_KEYS.AUTO_ORGANIZE,
 		])
-		const monitor = intent.processorProfile === 'jav'
+		const monitor = intent.processorProfile === 'anime_mikan'
+			? true
+			: intent.processorProfile === 'jav'
 			? config[STORAGE_KEYS.AUTO_DELETE_SMALL] === true || config[STORAGE_KEYS.AUTO_ORGANIZE] === true
 			: config[STORAGE_KEYS.AUTO_DELETE_SMALL] === true
 		const task = await background.TaskStore.queue({

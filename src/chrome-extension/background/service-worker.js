@@ -1,6 +1,7 @@
 importScripts(
 	'../shared/config.js',
 	'../shared/download-intent.js',
+	'../shared/anime-utils.js',
 	'../shared/file-rules.js',
 	'api/auth.js',
 	'api/client.js',
@@ -10,6 +11,7 @@ importScripts(
 	'processors/cleanup.js',
 	'processors/generic.js',
 	'processors/anime.js',
+	'processors/anime-mikan.js',
 	'processors/jav.js',
 	'tasks/monitor.js',
 	'content-scripts.js',

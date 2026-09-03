@@ -107,7 +107,7 @@ pixi run deploy
 |------|------|
 | 保存目录列表 | 按 `目录名:CID` 格式添加，每行一个 |
 | 自动检测链接 | 通过内容脚本在所有页面检测链接 |
-| 站点增强 | 分别设置 Generic、JavBus、Nyaa、Sukebei、Mikan 的启用状态、默认保存目录（从上方目录列表选择）、默认 processor 和页面控件 |
+| 站点增强 | 分别设置 Generic、JavBus、Nyaa、Sukebei、Mikan 的启用状态、默认保存目录（从上方目录列表选择）、默认 processor 和页面控件；Mikan 番组详情页可选 `anime_mikan` 归拢规则 |
 | 列表批量 | Nyaa、Sukebei、Mikan 默认并发 2；单项失败不会中断批次，提交前统一确认 |
 | 日志清理 | 设置页可清空已完成、失败和已记录的历史日志；进行中的任务会保留 |
 | 自动清理广告文件 | 回收明确垃圾扩展名；小视频还需满足主视频、分片、时长或广告关键词判断 |
@@ -117,7 +117,7 @@ pixi run deploy
 
 > 安全策略：默认 `.url/.html/.htm/.txt/.exe/.bat/.cmd/.torrent` 会直接回收；`.srt/.ass/.ssa/.sup/.vtt` 默认保护。图片/海报和 `.nfo` 的清理默认关闭，需在独立设置页开启；若扩展名同时出现在垃圾与保护列表，保护规则优先。视频不会仅因小于阈值就删除，还会避开最大主视频和 CD1/CD2；无法确认的文件保留。
 
-> 后台监控：推送成功后，任务会携带明确的 `processorProfile`。`generic` 仅做安全清理，`jav` 可继续执行番号整理，`anime` 保留 torrent 原名和目录。网站默认值可在确认窗中覆盖；后台不会根据 hostname 猜测规则。
+> 后台监控：推送成功后，任务会携带明确的 `processorProfile`。`generic` 仅做安全清理，`jav` 可继续执行番号整理，`anime` 保留 torrent 原名和目录，`anime_mikan` 按 Mikan 番组详情页的番名/集号安全归拢。网站默认值可在确认窗中覆盖；后台不会根据 hostname 猜测规则。
 
 ## ❓ 常见问题
 

@@ -107,7 +107,7 @@ After source changes, run `pixi run deploy` again and click **Reload** on the ex
 |---------|-------------|
 | Save directory list | Add folders in `Name:CID` format, one per line |
 | Auto-detect links | Detect links on all pages via content script |
-| Site enhancements | Configure enabled state, default save directory (selected from the directory list), processor profile, and page controls for Generic, JavBus, Nyaa, Sukebei, and Mikan |
+| Site enhancements | Configure enabled state, default save directory (selected from the directory list), processor profile, and page controls for Generic, JavBus, Nyaa, Sukebei, and Mikan; Mikan detail pages can use `anime_mikan` grouping |
 | List batches | Nyaa, Sukebei, and Mikan default to concurrency 2; failures are isolated and every batch uses unified confirmation |
 | Log cleanup | Clear completed, failed, and recorded history from Settings; active tasks are retained |
 | Background task manager | Open the Task manager tab from Home to inspect logs and retry failures |
@@ -118,7 +118,7 @@ After source changes, run `pixi run deploy` again and click **Reload** on the ex
 
 > By default, `.url/.html/.htm/.txt/.exe/.bat/.cmd/.torrent` are treated as explicit junk, while `.srt/.ass/.ssa/.sup/.vtt` are protected. Image/poster and `.nfo` cleanup is disabled by default. If an extension appears in both lists, the protected list wins.
 
-> Each task carries an explicit `processorProfile`: `generic` performs safe cleanup only, `jav` may apply code-based renaming, and `anime` preserves torrent names and directories. The confirmation dialog can override every site's default.
+> Each task carries an explicit `processorProfile`: `generic` performs safe cleanup only, `jav` may apply code-based renaming, `anime` preserves torrent names and directories, and `anime_mikan` groups Mikan Bangumi detail-page episodes by series and episode label. The confirmation dialog can override every site's default.
 
 ## ❓ FAQ
 

@@ -28,9 +28,9 @@ dist/extension
 ```text
 src/
 ├─ chrome-extension/
-│  ├─ shared/          配置、DownloadIntent 与通用规则
+│  ├─ shared/          配置、DownloadIntent、Anime 元数据与通用规则
 │  ├─ content/         Site Adapter、统一下载确认与批量提交队列
-│  ├─ background/      115 API、持久任务与 generic/jav/anime processors
+│  ├─ background/      115 API、持久任务与 generic/jav/anime/anime_mikan processors
 │  └─ ui/              popup 手工输入与 options 站点配置
 └─ README.md           开发说明
 scripts/

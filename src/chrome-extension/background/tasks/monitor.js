@@ -63,6 +63,8 @@
 	}
 
 	function processorNeedsWork(profile, config) {
+		// Mikan 的番组归拢是 profile 自身的职责，不依赖全局“自动整理”开关。
+		if (profile === 'anime_mikan') return true
 		if (profile === 'jav') return config.push115_auto_delete_small === true || config.push115_auto_organize === true
 		return ['generic', 'anime'].includes(profile) && config.push115_auto_delete_small === true
 	}

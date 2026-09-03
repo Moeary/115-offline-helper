@@ -4,7 +4,7 @@
 	const pathUtils = global.Push115.PathUtils
 	const intentApi = global.Push115.DownloadIntent
 	const SITE_LABELS = Object.freeze({ generic: 'Generic', javbus: 'JavBus', nyaa: 'Nyaa', sukebei: 'Sukebei', mikan: 'Mikan' })
-	const PROFILE_LABELS = Object.freeze({ generic: 'Generic', jav: 'JAV', anime: 'Anime' })
+	const PROFILE_LABELS = Object.freeze({ generic: 'Generic', jav: 'JAV', anime: 'Anime', anime_mikan: 'Anime · Mikan' })
 
 	function normalizeInput(input) {
 		if (Array.isArray(input)) return { intents: input }
@@ -18,6 +18,7 @@
 			return `JAV 规则会尝试按番号重命名主视频、字幕和文件夹。${code ? `当前番号：${code}` : '当前未检测到明确番号，将谨慎依现有文件名处理。'}`
 		}
 		if (profile === 'anime') return 'Anime 规则会保留 torrent 原有名称和目录结构，只执行已启用的安全垃圾清理。'
+		if (profile === 'anime_mikan') return 'Anime · Mikan 会按番组页名称归拢到“番名”文件夹：单集使用番名.ext，多集使用番名_集号.ext；仅在明确的 Mikan 番组详情页提供归拢信息。'
 		return 'Generic 规则只执行已启用的通用安全清理，不会按番号重命名。'
 	}
 
