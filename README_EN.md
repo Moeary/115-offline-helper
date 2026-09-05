@@ -8,149 +8,124 @@
 </h1>
 
 <p align="center">
-  <strong>Detect magnet/ed2k links and push them to your 115.com cloud offline download with one click.</strong>
+  <strong>Turn web resources into traceable 115 offline tasks with explicit rules.</strong>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.2.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.3.0-orange" alt="Version">
 </p>
 
 ---
 
-## ✨ Features
+## What makes this build different
 
-- 🔍 **Auto-detect links** — Detect magnet and ed2k links on any web page (opt-in)
-- 🧩 **Site adapters** — Profiles for Generic, JavBus, Nyaa/Sukebei, and Mikan; OpenBT uses Generic
-- 📺 **List batch submission** — Nyaa, Sukebei, and Mikan support selected/all submission, BTIH deduplication, bounded concurrency, and per-item progress
-- 🗂️ **Mikan series memory** — Bind a Mikan `/Home/Bangumi/<ID>` page to a 115 CID once; completed shows can be submitted together and later episodes reuse the same destination
-- 📥 **Unified confirmation** — Page buttons, batches, and manual multi-line input share editable links, save directory, and processor selection
-- 📁 **Custom save directory** — Choose which 115 folder to save downloads to
-- 🗑️ **Safe junk cleanup** — Remove obvious HTML/TXT attachments and small ad videos; subtitles are protected and image/NFO cleanup is off by default
-- 📂 **Auto-organize videos** — Move video files into folders based on filename
-- 🧰 **Full settings and logs page** — Manage extension rules, cleanup switches, directories, and background logs
-- 🔄 **In-popup task manager** — Open background task status, logs, refresh, and retry directly from the Home tab
-- 📱 **QR code login** — Log into 115.com directly from the extension popup
-- 🌐 **Bilingual UI** — Supports both Chinese and English
+The extension does not put every website into one giant content script, and it never silently applies JAV renaming to unrelated downloads. Every submission follows the same pipeline:
 
-## 📦 Installation
+```text
+page / manual input
+      ↓ site adapter
+DownloadIntent (source, title, code, folder, profile)
+      ↓ one confirmation dialog
+bounded queue (default concurrency: 2)
+      ↓ 115 offline API
+processorProfile-driven cleanup or organization
+```
 
-### Chrome Web Store (Recommended)
+Adapters understand pages, the background worker owns API calls and persistent tasks, and the selected `processorProfile` is the only source of post-processing behavior. Closing the source tab does not stop a task.
 
-Install directly from the Chrome Web Store:
+## Site adapters
+
+| Site | Enhancement | Default profile | Intended use |
+|------|-------------|-----------------|--------------|
+| Generic | “Send to 115” beside Magnet/ED2K links | `generic` | Any authorized page; no media guessing |
+| JavBus | Page-number-aware Magnet buttons | `jav` | Code-first JAV organization |
+| Nyaa | Row buttons, checkboxes, select-all and batch submission | `anime` | Multi-select torrents with BTIH deduplication |
+| Sukebei | Same list core as Nyaa, separate site profile | `generic` | Safe default; change to `jav` only when appropriate |
+| Mikan | Per-resource, selected and all-resource actions | `anime` | Remember a destination for `/Home/Bangumi/<ID>` |
+| OpenBT | Generic fallback; no special adapter/profile | `generic` | No speculative DOM coupling |
+
+Nyaa, Sukebei and Mikan share one confirmation dialog and one rate-limited queue. A throttled `MutationObserver` handles appended rows without repeatedly injecting controls.
+
+## Post-processing profiles
+
+| Profile | Behavior | Guardrail |
+|---------|----------|-----------|
+| `generic` | Existing conservative junk cleanup | Never renames by code |
+| `jav` | Safe cleanup; page code first; largest main video → `CODE.ext`; subtitles follow; task folder → code | Triggered only by this explicit profile |
+| `anime` | Keeps torrent names and directory semantics; batch/Mikan archive moves identified video/subtitle files into the chosen destination | No JAV rename and no guessed show/episode names |
+
+Subtitle extensions are protected by default, image/NFO cleanup is opt-in, and every remote move/rename/recycle is verified with explicit CID/FID values. Unknown files, collisions and inconsistent directory responses stay in place for a later retry.
+
+### Mikan series memory
+
+The numeric ID in `/Home/Bangumi/<ID>` is the series identity. On the first Anime submission, the confirmation dialog can create/reuse a series folder, bind the current folder, or perform a one-time plain Anime submission. The binding is stored separately in `push115_anime_library`, so clearing logs does not remove it.
+
+- Finished shows can be selected and archived together.
+- For an ongoing show, submit episodes 1–8 first; later episodes such as EP09 reuse the same CID.
+- Submitted BTIH values are marked as duplicates by default and can be resubmitted explicitly.
+- Only known video/subtitle files are moved; verified-empty wrapper folders are recycled, while unknown or conflicting sources are retained.
+
+## One confirmation flow for every source
+
+Inline buttons, Nyaa/Sukebei/Mikan batches, JavBus, and popup input all open the same dialog:
+
+1. One Magnet or ED2K per line; trim whitespace and ignore blank lines.
+2. Deduplicate exact links and BTIH values; mark invalid lines instead of submitting them silently.
+3. Show source site, title, save directory and selected profile.
+4. Allow `generic`, `jav` or `anime` regardless of the site's recommendation; show a warning when a choice is unusual but do not lock it.
+5. Report `waiting`, `submitting`, `success`, `failed` and `duplicate` per item. One failure never aborts the rest of a batch.
+
+## Installation
+
+### Chrome Web Store
 
 [<img src="https://storage.googleapis.com/web-dev-uploads/image/WlD8wC6g8khYWPJUsQceQkhXSlv1/iNEddTyWiMfLSwFD6qGq.png" height="58" alt="Available in the Chrome Web Store">](https://chromewebstore.google.com/detail/115-offline-helper/blgnjjjbmjgilkiimglodjdebcdaidgl?hl=zh-CN&authuser=0)
 
-### Build and deploy from source with Pixi
+### Build from source with Pixi
 
-On Windows, install [pixi](https://pixi.sh/) and Chrome. From the repository root:
+Install [pixi](https://pixi.sh/) and Chrome on Windows:
 
 ```powershell
 Copy-Item config.example.toml config.toml
-```
-
-Set the local `chrome.exe` path in `[browser] chrome`, then run:
-
-```powershell
 pixi install
 pixi run deploy
 ```
 
-The deploy task validates the extension, copies it to `dist/extension`, opens `chrome://extensions/`, and asks Chrome to load the compiled directory. If an already-running Chrome ignores the launch argument, enable **Developer mode**, click **Load unpacked**, and choose `dist/extension` once.
+Set the local Chrome path in `[browser] chrome`. Deploy validates the MV3 entry points, copies the extension to `dist/extension`, and opens the extensions page. If Chrome is already running, enable Developer mode and load `dist/extension` once, then use **Reload** after subsequent builds.
 
-After source changes, run `pixi run deploy` again and click **Reload** on the extension card.
+### Manual install
 
-### Manual Install
+Download the latest archive from [Releases](https://github.com/gangz1o/115-offline-helper/releases/latest), or clone the repository. Open `chrome://extensions/` (or `edge://extensions/`), enable Developer mode, and choose **Load unpacked** after running `pixi run build`.
 
-1. **Download the extension**
+## First run
 
-   Go to the [Releases](https://github.com/gangz1o/115-offline-helper/releases/latest) page and download `115-offline-helper_v*.zip`, then unzip.
+1. Scan the QR code with the 115 mobile client.
+2. Maintain the shared 115 directory catalog in Settings. Site profiles and the confirmation dialog select from this catalog; legacy `Name:CID` entries are migrated automatically.
+3. Enable and configure Generic, JavBus, Nyaa, Sukebei and Mikan separately. Set defaults, inline controls, batch controls and concurrency (default 2, maximum 6).
+4. Push from a page or paste multiple links in the popup. The dialog can override both the site profile and destination.
+5. Inspect, refresh or retry tasks from the background task page. **Clear logs** removes history only; it keeps active tasks, series bindings and deduplication receipts.
 
-   Or clone the repo:
+Generic uses optional `<all_urls>` permission. Dedicated site enhancements use their own host permissions. OpenBT has no separate profile and follows Generic when that permission is enabled.
 
-   ```bash
-   git clone https://github.com/gangz1o/115-offline-helper.git
-   ```
-
-2. **Open Extensions page**
-
-   | Browser | URL |
-   |---------|-----|
-   | Chrome | `chrome://extensions/` |
-   | Edge | `edge://extensions/` |
-
-3. **Enable Developer Mode**
-
-   Toggle the **Developer mode** switch — bottom-left on Edge, top-right on Chrome.
-
-4. **Load the extension**
-
-   Click **Load unpacked**. For a source checkout, run `pixi run build` first and select `dist/extension`; for a release archive, select the extracted extension directory.
-
-5. **Done!**
-
-   The extension icon will appear in your toolbar. Pin it for easy access.
-
-> **💡 Tip:** To update, run `git pull` and click the ↻ refresh button on the extension card.
-
-> **💡 Compatibility:** This extension is built on Manifest V3 and works with all Chromium-based browsers (Chrome, Edge, Brave, Arc, etc.).
-
-## 🚀 Usage
-
-1. **Login** — Click the extension icon → **Scan to Login** → scan QR code with the 115 mobile app.
-2. **Set save directory** — Choose a folder from the dropdown on the Home tab, or add custom paths in Settings (`FolderName:CID` format).
-3. **Push links** — Generic adds buttons beside magnet/ed2k links; JavBus uses its page code; Nyaa, Sukebei, and Mikan support single and batch submission. OpenBT uses Generic.
-
-### Settings
-
-| Setting | Description |
-|---------|-------------|
-| Save directory list | Add folders in `Name:CID` format, one per line |
-| Auto-detect links | Detect links on all pages via content script |
-| Site enhancements | Configure enabled state, default save directory (selected from the directory list), processor profile, and page controls for Generic, JavBus, Nyaa, Sukebei, and Mikan |
-| List batches | Nyaa, Sukebei, and Mikan default to concurrency 2; failures are isolated and every batch uses unified confirmation |
-| Mikan series archive | First use can create/reuse a series folder or bind the selected folder; later episodes reuse the remembered CID, preserving torrent names and removing only verified-empty task folders |
-| Log cleanup | Clear completed, failed, and recorded history from Settings; active tasks are retained |
-| Background task manager | Open the Task manager tab from Home to inspect logs and retry failures |
-| Junk extension rules | Edit junk, protected, and optional cleanup extensions in the full settings page |
-| Image/NFO cleanup | Off by default; enable it explicitly in the full settings page |
-| Safe junk cleanup | Explicit junk extensions are removed; small videos still pass safety checks |
-| Auto-organize videos | Move video files into named folders |
-
-> By default, `.url/.html/.htm/.txt/.exe/.bat/.cmd/.torrent` are treated as explicit junk, while `.srt/.ass/.ssa/.sup/.vtt` are protected. Image/poster and `.nfo` cleanup is disabled by default. If an extension appears in both lists, the protected list wins.
-
-> Each task carries an explicit `processorProfile`: `generic` performs safe cleanup only, `jav` may apply code-based renaming, and `anime` preserves torrent names by default. Anime tasks submitted together from one confirmation dialog, or bound to a Mikan series, move video/subtitle files into the remembered save directory after completion and delete only verified-empty task folders; the file-ID plan resumes after worker restarts and never forces series renaming. The confirmation dialog can override every site's default.
-
-## ❓ FAQ
-
-**Q: How to find a folder's CID?**
-> Open the folder in [115.com](https://115.com), look at the URL: `https://115.com/?cid=1234567` — the number after `cid=` is the CID.
-
-**Q: "Not logged in" error?**
-> Click extension icon → **Scan to Login**, scan with 115 mobile app.
-
-**Q: Auto-detect not working?**
-> Enable "Auto detect links" in Settings. The browser will ask for additional permissions — click Allow.
-
-## 🛠️ Development commands
+## Development
 
 ```powershell
 pixi install
-pixi run build    # Validate and generate dist/extension
-pixi run deploy   # Build and open the Chrome extensions page
-pixi run clean    # Remove build output
+pixi run build
+pixi run deploy
+pixi run clean
+node --test tests/anime-routing.test.cjs
 ```
 
-See [`src/README.md`](src/README.md) for the source layout. The local `config.toml` only stores the Chrome path and is ignored by Git.
+See [`src/README.md`](src/README.md), [`src/chrome-extension/README.md`](src/chrome-extension/README.md), and [`AGENTS.md`](AGENTS.md) for module contracts, verification rules and versioning.
 
-## 🔒 Privacy
+## Privacy and license
 
-- All data is stored locally via `chrome.storage.local`
-- No user data is collected, transmitted, or shared with third parties
-- Only communicates with `*.115.com` domains
-- [Full Privacy Policy](https://gangz1o.github.io/115-offline-helper/privacy-policy.html)
-
-## 📄 License
+- Data is kept locally in `chrome.storage.local`.
+- No user data is collected or shared.
+- Network access is limited to `*.115.com`.
+- [Privacy policy](https://gangz1o.github.io/115-offline-helper/privacy-policy.html)
 
 [MIT License](LICENSE)
