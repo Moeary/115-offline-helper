@@ -18,10 +18,15 @@
 			visited.add(folder.cid)
 			const { items, path } = await folders.read(folder.cid)
 			if (folders.pathCidOf(path.at(-2)) !== folder.parentCid) throw new Error('任务目录位置发生变化，暂停整理')
-			result.folders.push(folder)
+			const folderName = folders.nameOf(path.at(-1))
+			result.folders.push({ ...folder, name: folderName })
+			const wrapperVideoName = inferWrapperVideoName(folderName, items)
 			for (const item of items) {
 				if (folders.isFolder(item)) queue.push({ cid: folders.cidOf(item), parentCid: folder.cid, depth: folder.depth + 1 })
-				else if (isMedia(item) && fidOf(item)) result.files.push({ fid: fidOf(item), name: folders.nameOf(item), parentCid: folder.cid })
+				else if ((isMedia(item) || (wrapperVideoName && !rules.getExtension(folders.nameOf(item)))) && fidOf(item)) {
+					const name = wrapperVideoName ? wrapperVideoName : folders.nameOf(item)
+					result.files.push({ fid: fidOf(item), name, parentCid: folder.cid })
+				}
 			}
 		}
 		return result
@@ -83,6 +88,7 @@
 		}
 
 		const retained = await removeEmptyPlannedFolders(task, plan, destinationCid, appendLog)
+		await restoreDestinationFileNames(task, plan, destinationCid, checkpoint, appendLog)
 		await cleanupStagingFolder(task, plan, destinationCid, appendLog)
 		plan.finished = true
 		await checkpoint()
@@ -99,6 +105,28 @@
 
 	function sameName(left, right) {
 		return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase()
+	}
+
+	function isVideoName(name) {
+		return rules.isVideo({ n: String(name || '') })
+	}
+
+	function inferWrapperVideoName(folderName, items, sourceItem = null) {
+		if (!isVideoName(folderName)) return ''
+		const files = (Array.isArray(items) ? items : []).filter(item => item?.sha && fidOf(item))
+		if (files.length !== 1) return ''
+		if (sourceItem && fidOf(files[0]) !== fidOf(sourceItem)) return ''
+		// A previous build could rename the only video to a release-group prefix
+		// such as `[NEST]`, losing its extension. Treat a single extensionless
+		// file as the video represented by a `.mkv`/`.mp4` wrapper, but never
+		// infer a video name for a known subtitle or other file type.
+		const only = files[0]
+		return rules.isVideo(only) || !rules.getExtension(folders.nameOf(only)) ? String(folderName) : ''
+	}
+
+	function plannedWrapperVideoName(listing, sourceItem) {
+		const folderName = folders.nameOf(listing.path.at(-1))
+		return inferWrapperVideoName(folderName, listing.items, sourceItem)
 	}
 
 	function planFolderParents(plan) {
@@ -157,23 +185,40 @@
 		const parents = planFolderParents(plan)
 		const parentNames = new Map()
 		const sameNameParents = new Set()
+		const sourceListings = new Map()
+		const restoreNames = new Set()
+		async function sourceListing(parentCid) {
+			const cid = String(parentCid || '')
+			if (!sourceListings.has(cid)) sourceListings.set(cid, await folders.read(cid))
+			return sourceListings.get(cid)
+		}
 		for (const file of pendingFiles) {
+			const listing = await sourceListing(file.parentCid)
+			const sourceItem = listing.items.find(item => item.sha && fidOf(item) === String(file.fid))
+			if (!sourceItem) throw new Error('暂存文件不在原位置，稍后重试')
+			const wrapperVideoName = plannedWrapperVideoName(listing, sourceItem)
+			if (wrapperVideoName && !sameName(file.name, wrapperVideoName)) file.name = wrapperVideoName
+			// Older Anime/Mikan builds could leave a shortened or otherwise
+			// temporary file name behind.  Keep the name captured in the plan and
+			// restore it while the file is safely inside the staging directory.
+			if (folders.nameOf(sourceItem) !== String(file.name || '')) restoreNames.add(String(file.fid))
 			let parentCid = String(file.parentCid || '')
 			const visited = new Set()
 			while (parentCid && parentCid !== String(destinationCid) && !visited.has(parentCid)) {
 				visited.add(parentCid)
 				if (!parentNames.has(parentCid)) {
-					const listing = await folders.read(parentCid)
-					if (folders.pathCidOf(listing.path.at(-2)) !== String(parents.get(parentCid) || destinationCid)) {
+					const parentListing = await sourceListing(parentCid)
+					if (folders.pathCidOf(parentListing.path.at(-2)) !== String(parents.get(parentCid) || destinationCid)) {
 						throw new Error('任务目录位置发生变化，暂停整理')
 					}
-					parentNames.set(parentCid, folders.nameOf(listing.path.at(-1)))
+					parentNames.set(parentCid, folders.nameOf(parentListing.path.at(-1)))
 				}
 				if (sameName(file.name, parentNames.get(parentCid))) sameNameParents.add(parentCid)
 				parentCid = parents.get(parentCid) || ''
 			}
 		}
 		return plan.files.filter(file => {
+			if (restoreNames.has(String(file.fid))) return true
 			let parentCid = String(file.parentCid || '')
 			const visited = new Set()
 			while (parentCid && parentCid !== String(destinationCid) && !visited.has(parentCid)) {
@@ -258,12 +303,58 @@
 			appendLog(task, '暂存文件：' + (sourceFile.name || fid))
 			await checkpoint()
 		}
+		await restoreStagedFileNames(task, plan, staging.cid, fileIds, destinationCid, checkpoint, appendLog)
 
 		// Remove now-empty source wrappers before moving staged files back. This
 		// is the critical step for 115's same-name folder/file restriction.
 		await removeEmptyPlannedFolders(task, plan, destinationCid, appendLog)
 		await checkpoint()
 		return { fileIds }
+	}
+
+	async function restoreStagedFileNames(task, plan, stagingCid, fileIds, destinationCid, checkpoint, appendLog) {
+		let listing = await folders.read(stagingCid)
+		for (const fid of fileIds) {
+			const planned = plan.files.find(file => String(file.fid) === String(fid))
+			if (!planned || !planned.name) continue
+			const item = listing.items.find(entry => entry.sha && fidOf(entry) === String(fid))
+			if (!item) {
+				// A previous attempt may already have moved this file back to the
+				// destination.  It no longer needs a rename in the staging folder.
+				const destination = await folders.read(destinationCid)
+				if (destination.items.some(entry => entry.sha && fidOf(entry) === String(fid))) continue
+				throw new Error('临时目录缺少待恢复文件，稍后重试')
+			}
+			const currentName = folders.nameOf(item)
+			if (currentName === planned.name) continue
+			const conflict = listing.items.find(entry => entry.sha && fidOf(entry) !== String(fid) && sameName(folders.nameOf(entry), planned.name))
+			if (conflict) throw new Error('恢复原文件名发生同名冲突：' + planned.name)
+			if (!api.operationSucceeded(await api.rename(fid, planned.name))) throw new Error('恢复原文件名失败，稍后重试')
+			listing = await folders.read(stagingCid)
+			const restored = listing.items.find(entry => entry.sha && fidOf(entry) === String(fid))
+			if (!restored || folders.nameOf(restored) !== planned.name) throw new Error('恢复原文件名尚未确认，稍后复核')
+			appendLog(task, `恢复原文件名：${currentName} → ${planned.name}`)
+			await checkpoint()
+		}
+	}
+
+	async function restoreDestinationFileNames(task, plan, destinationCid, checkpoint, appendLog) {
+		let listing = await folders.read(destinationCid)
+		for (const planned of plan.files || []) {
+			const fid = String(planned.fid || '')
+			if (!fid || !planned.name) continue
+			const item = listing.items.find(entry => entry.sha && fidOf(entry) === fid)
+			if (!item || folders.nameOf(item) === planned.name) continue
+			const conflict = listing.items.find(entry => folders.nameOf(entry) && fidOf(entry) !== fid && sameName(folders.nameOf(entry), planned.name))
+			if (conflict) throw new Error('恢复原文件名发生同名冲突：' + planned.name)
+			const currentName = folders.nameOf(item)
+			if (!api.operationSucceeded(await api.rename(fid, planned.name))) throw new Error('恢复目标文件名失败，稍后重试')
+			listing = await folders.read(destinationCid)
+			const restored = listing.items.find(entry => entry.sha && fidOf(entry) === fid)
+			if (!restored || folders.nameOf(restored) !== planned.name) throw new Error('恢复目标文件名尚未确认，稍后复核')
+			appendLog(task, `恢复原文件名：${currentName} → ${planned.name}`)
+			await checkpoint()
+		}
 	}
 
 	async function removeEmptyPlannedFolders(task, plan, destinationCid, appendLog) {

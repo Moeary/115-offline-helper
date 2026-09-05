@@ -32,7 +32,8 @@
 		const items = Array.isArray(rawItems) ? rawItems : []
 		const batchId = options.batchId || (items.length > 1 ? makeBatchId() : '')
 		const entries = normalizeItems(items, batchId)
-		const concurrency = Math.min(6, Math.max(1, Math.round(Number(options.concurrency) || 2)))
+		const maxConcurrency = global.Push115.Config.BATCH_CONCURRENCY_MAX || 2
+		const concurrency = Math.min(maxConcurrency, Math.max(1, Math.round(Number(options.concurrency) || 2)))
 		const onStatus = typeof options.onStatus === 'function' ? options.onStatus : () => {}
 		for (const entry of entries) onStatus(entry, entry.status)
 

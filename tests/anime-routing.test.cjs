@@ -37,13 +37,22 @@ function environment(saved = {}, disk = null) {
 		async rename(fid, name) {
 			calls.rename.push({ fid: String(fid), name })
 			const node = tree.get(String(fid))
-			if (!node) return { state: false }
-			const parent = tree.get(node.parent)
-			if (parent.items.some(item => String(item.cid || item.fid || item.file_id || '') !== String(fid) && String(item.n || item.name || '').toLowerCase() === String(name).toLowerCase())) return { state: false }
-			node.name = name
-			const entry = parent.items.find(item => String(item.cid || item.fid || item.file_id || '') === String(fid))
-			if (entry) entry.n = name
-			return { state: true }
+			if (node) {
+				const parent = tree.get(node.parent)
+				if (parent.items.some(item => String(item.cid || item.fid || item.file_id || '') !== String(fid) && String(item.n || item.name || '').toLowerCase() === String(name).toLowerCase())) return { state: false }
+				node.name = name
+				const entry = parent.items.find(item => String(item.cid || item.fid || item.file_id || '') === String(fid))
+				if (entry) entry.n = name
+				return { state: true }
+			}
+			for (const parent of tree.values()) {
+				const entry = parent.items.find(item => String(item.fid || item.file_id || '') === String(fid))
+				if (!entry) continue
+				if (parent.items.some(item => String(item.cid || item.fid || item.file_id || '') !== String(fid) && String(item.n || item.name || '').toLowerCase() === String(name).toLowerCase())) return { state: false }
+				entry.n = name
+				return { state: true }
+			}
+			return { state: false }
 		},
 		async move(fid, cid) {
 			calls.move.push(fid)
@@ -186,6 +195,21 @@ test('same-name wrapper folder is staged before moving its media into the series
 	assert.match(messages.join(), /已按原名归档/)
 })
 
+test('a fresh retry restores a shortened file from its wrapper filename before flattening', async () => {
+	const e = environment(); const target = await prepare(e)
+	const originalName = '[NEST] Chainsmoker Cat - 04 [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv'
+	// Reproduce the screenshot-era state: 115 exposes a wrapper directory named
+	// after the torrent, but an older rename attempt left its only video as
+	// `[NEST]`. There is no persisted animeTransfer plan yet.
+	const root = e.folder(target.cid, originalName, '305'); e.file(root, '[NEST]', '306')
+	const task = { ...intent(4, target), taskId: 'restore-wrapper-name' }
+	await e.bg.Processors.anime.process({ task, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	assert.equal(e.calls.rename.length, 1)
+	assert.deepEqual(e.calls.rename[0], { fid: '306', name: originalName })
+	assert.equal(e.tree.has(root), false)
+	assert.deepEqual(e.tree.get(target.cid).items.filter(item => item.sha).map(item => item.n), [originalName])
+})
+
 test('a batch of same-name wrappers is staged and flattened without leftover directories', async () => {
 	const e = environment(); const target = await prepare(e)
 	const names = Array.from({ length: 9 }, (_, index) => `[NEST] Chainsmoker Cat - ${String(index + 1).padStart(2, '0')} [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv`)
@@ -215,6 +239,51 @@ test('a nested same-name wrapper is detected through the explicit task path', as
 	assert.equal(e.tree.has(inner), false)
 	assert.equal(e.tree.has(outer), false)
 	assert.deepEqual(e.tree.get(target.cid).items.filter(item => item.sha).map(item => item.n), [name])
+})
+
+test('a shortened legacy file name is restored from the persisted original name', async () => {
+	const e = environment(); const target = await prepare(e)
+	const originalName = '[NEST] Chainsmoker Cat - 11 [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv'
+	const root = e.folder(target.cid, originalName, '460')
+	const video = e.file(root, '[NEST]', '461')
+	const task = {
+		...intent(11, target), taskId: 'restore-original-name',
+		animeTransfer: {
+			version: 1,
+			sourceCid: root,
+			destinationCid: target.cid,
+			folders: [{ cid: root, parentCid: target.cid, depth: 0 }],
+			files: [{ fid: video.fid, name: originalName, parentCid: root }],
+			finished: false,
+		},
+	}
+	await e.bg.Processors.anime.process({ task, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	assert.equal(e.calls.rename.length, 1)
+	assert.equal(e.tree.has(root), false)
+	assert.deepEqual(e.tree.get(target.cid).items.filter(item => item.sha).map(item => item.n), [originalName])
+})
+
+test('a file already moved by an older run is renamed back after its wrapper is removed', async () => {
+	const e = environment(); const target = await prepare(e)
+	const originalName = '[NEST] Chainsmoker Cat - 12 [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv'
+	const root = e.folder(target.cid, originalName, '470')
+	const video = e.file(root, '[NEST]', '471')
+	await e.bg.FilesApi.move(video.fid, target.cid)
+	const task = {
+		...intent(12, target), taskId: 'restore-destination-name',
+		animeTransfer: {
+			version: 1,
+			sourceCid: root,
+			destinationCid: target.cid,
+			folders: [{ cid: root, parentCid: target.cid, depth: 0 }],
+			files: [{ fid: video.fid, name: originalName, parentCid: root }],
+			finished: false,
+		},
+	}
+	await e.bg.Processors.anime.process({ task, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	assert.equal(e.calls.rename.length, 1)
+	assert.equal(e.tree.has(root), false)
+	assert.deepEqual(e.tree.get(target.cid).items.filter(item => item.sha).map(item => item.n), [originalName])
 })
 
 test('staged wrapper resumes after a move retry without recreating its temporary directory', async () => {
@@ -259,6 +328,28 @@ test('a failed 1.3.x rename marker is upgraded to file staging on the next retry
 	assert.match(e.calls.create[1].name, /^__push115_stage_/)
 	assert.equal(e.tree.has(root), false)
 	assert.deepEqual(e.tree.get(target.cid).items.filter(x => x.sha).map(x => x.n), [name])
+})
+
+test('a failed legacy marker plus a shortened file is restored without a prefix rename', async () => {
+	const e = environment(); const target = await prepare(e)
+	const originalName = '[NEST] Chainsmoker Cat - 07 [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv'
+	const root = e.folder(target.cid, originalName, '330'); const video = e.file(root, '[NEST]', '331')
+	const task = {
+		...intent(7, target), taskId: 'legacy-marker-short-name',
+		animeTransfer: {
+			version: 1,
+			sourceCid: root,
+			destinationCid: target.cid,
+			folders: [{ cid: root, parentCid: target.cid, depth: 0 }],
+			files: [{ fid: video.fid, name: originalName, parentCid: root }],
+			staging: { originalName, name: '__push115_tmp_legacy-marker-short-name' },
+			finished: false,
+		},
+	}
+	await e.bg.Processors.anime.process({ task, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	assert.deepEqual(e.calls.rename, [{ fid: video.fid, name: originalName }])
+	assert.equal(e.tree.has(root), false)
+	assert.deepEqual(e.tree.get(target.cid).items.filter(item => item.sha).map(item => item.n), [originalName])
 })
 
 test('deleted bound directory / 115 root fallback never creates replacement or submits a download', async () => {

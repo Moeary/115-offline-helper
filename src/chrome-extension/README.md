@@ -95,7 +95,7 @@ chrome-extension/
 }
 ```
 
-页面单发、列表批量、Mikan 番组提交和 popup 手工输入全部进入同一个确认窗口。窗口会 trim、去空行、按 BTIH 与完整链接去重，显示非法行，并允许用户覆盖站点默认 profile 与目录。Queue 默认并发 2（配置上限 6），每项独立显示 `waiting`、`submitting`、`success`、`failed` 或 `duplicate`。
+页面单发、列表批量、Mikan 番组提交和 popup 手工输入全部进入同一个确认窗口。窗口会 trim、去空行、按 BTIH 与完整链接去重，显示非法行，并允许用户覆盖站点默认 profile 与目录。Queue 默认并发 2（安全上限也是 2），每项独立显示 `waiting`、`submitting`、`success`、`failed` 或 `duplicate`；后台 115 文件变更再由 FilesApi 串行限速。
 
 ## Processor 边界
 
@@ -109,7 +109,7 @@ chrome-extension/
 
 ### `anime`
 
-普通 Anime 任务保留 torrent 原始名称和目录，不调用 JAV rename。批量确认或 Mikan 番组绑定时，处理器只收集明确的视频/字幕文件，把它们移到同一个目标 CID；若 115 包装目录与视频文件同名，会在目标目录创建可恢复的 `__push115_stage_*` 临时目录，按明确 FID 暂存文件、回收确认为空的包装目录，再把文件移回并回收临时目录。计划同时保存临时 CID 和文件 ID，service worker 重启后可续跑，目标可见性和源目录为空均会复核。未知文件、同名冲突或 115 返回不一致时保留源文件，不做全库扫描和强制番名/集数猜测。
+普通 Anime 任务保留 torrent 原始名称和目录，不调用 JAV rename。批量确认或 Mikan 番组绑定时，处理器只收集明确的视频/字幕文件，把它们移到同一个目标 CID；若 115 包装目录与视频文件同名，会在目标目录创建可恢复的 `__push115_stage_*` 临时目录，按明确 FID 暂存文件、回收确认为空的包装目录，再把文件移回并回收临时目录。计划同时保存临时 CID、FID 和原始文件名；旧版本若留下短文件名，会在临时目录内恢复计划中的原名。`[NEST]` 等发布组前缀只有在原始 torrent 名中存在时才会保留，扩展不会自行添加。service worker 重启后可续跑，目标可见性和源目录为空均会复核。未知文件、同名冲突或 115 返回不一致时保留源文件，不做全库扫描和强制番名/集数猜测。
 
 Mikan 绑定使用 `push115_anime_library`：`mikan:<BangumiID>` 对应目标 CID 与模式。完结番可以一次整合，连载番先提交前 8 集、之后补集仍会复用同一目录；清空日志只清历史记录，不清绑定和 BTIH 去重回执。设置页的“完全重置任务”是单独的本地运行时清理：会清空任务、处理计划、番组绑定和去重回执，并使重置前的监控/提交对象无法重新写回；不会调用 115 删除接口。
 
@@ -131,7 +131,7 @@ Mikan 绑定使用 `push115_anime_library`：`mikan:<BangumiID>` 对应目标 CI
 ```powershell
 $env:HOME = $env:USERPROFILE
 pixi run build
-node --test tests/anime-routing.test.cjs
+node --test tests/*.test.cjs
 ```
 
 `scripts/build.py` 会校验 Manifest V3、图标、HTML、本地资源、service worker 的 `importScripts` 和关键入口文件。不要直接编辑 `dist/extension/`。

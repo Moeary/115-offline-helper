@@ -79,6 +79,9 @@
 		}),
 	})
 	const PROCESSOR_PROFILES = Object.freeze(['generic', 'jav', 'anime'])
+	// 115 对短时间内的批量请求较敏感。页面批量提交最多只允许两个
+	// 离线任务同时进入后台；文件移动/重命名等远程变更另由 FilesApi 串行。
+	const BATCH_CONCURRENCY_MAX = 2
 
 	const DEFAULT_CONFIG = Object.freeze({
 		[STORAGE_KEYS.SAVE_PATH]: '',
@@ -143,7 +146,7 @@
 			if (['nyaa', 'sukebei', 'mikan'].includes(siteId)) {
 				profile.batchSelection = saved.batchSelection !== undefined ? saved.batchSelection === true : true
 				const concurrency = Number(profile.batchConcurrency)
-				profile.batchConcurrency = Number.isFinite(concurrency) ? Math.min(6, Math.max(1, Math.round(concurrency))) : 2
+				profile.batchConcurrency = Number.isFinite(concurrency) ? Math.min(BATCH_CONCURRENCY_MAX, Math.max(1, Math.round(concurrency))) : 2
 			}
 			// Read-only compatibility aliases keep 1.1.0 callers and stored tasks usable during upgrade.
 			profile.savePathCid = profile.defaultSavePathCid
@@ -202,6 +205,7 @@
 		SITE_DEFINITIONS,
 		DEFAULT_SITE_PROFILES,
 		PROCESSOR_PROFILES,
+		BATCH_CONCURRENCY_MAX,
 		DEFAULT_CONFIG,
 		normalizeCid,
 		normalizeProcessorProfile,

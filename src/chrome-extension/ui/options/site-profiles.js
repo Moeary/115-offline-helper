@@ -84,12 +84,12 @@
 				const concurrency = document.createElement('input')
 				concurrency.type = 'number'
 				concurrency.min = '1'
-				concurrency.max = '6'
+				concurrency.max = String(global.Push115.Config.BATCH_CONCURRENCY_MAX || 2)
 				concurrency.dataset.field = 'batchConcurrency'
 				concurrency.value = profile.batchConcurrency
 				card.append(
 					checkboxField('显示批量选择', 'batchSelection', profile.batchSelection !== false),
-					field('批量并发数（1–6）', concurrency),
+					field('批量并发数（1–2）', concurrency),
 				)
 			}
 			container.appendChild(card)

@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.4.2-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.4.6-orange" alt="Version">
 </p>
 
 ---
@@ -63,6 +63,8 @@ DownloadIntent（来源、标题、番号、目录、规则）
 清理仍遵循保守原则：字幕扩展名默认保护，图片/NFO 清理默认关闭；移动、改名、回收目录前都以明确的 CID/FID 复核。遇到同名冲突、未知文件或目录状态不一致时保留源文件，等待后续重试。
 
 Mikan 还专门处理 115 常见的“包装目录名与里面的视频文件同名”情况：不依赖容易失败的远程改名，而是在番组目录下创建本任务专用的 `__push115_stage_*` 临时目录，先按明确 FID 暂存视频/字幕，确认原包装目录为空后回收，再把文件移回目标目录并回收临时目录。移动计划会记录临时 CID 和文件 ID，重试不会重复创建；目标目录里真正存在的同名文件仍视为冲突，不会覆盖。
+
+`[NEST]` 等发布组前缀若来自 torrent 原始文件名，扩展不会自行添加或剥离；若旧版处理中曾把文件名改短，重试时会依据计划恢复原始文件名。对于“目录名仍是完整 `.mkv`、目录内文件却只剩 `[NEST]`”的旧状态，1.4.6 会把目录名作为待恢复的原名，仅处理这一明确文件，完成后清理空目录。
 
 ### Mikan 番组记忆
 
@@ -125,7 +127,7 @@ pixi run deploy
 
 1. 点击扩展图标，使用 115 手机客户端扫码登录。
 2. 在设置页维护“115 离线目录”清单。站点档案和确认窗口从这份清单选择目录；旧版的 `目录名:CID` 配置会自动迁移，不需要为每个站点重复填写 CID。
-3. 在“站点增强”中分别启用 Generic、JavBus、Nyaa、Sukebei、Mikan，设置各自默认目录、默认规则、内联按钮和列表并发数。默认并发为 2，最大 6。
+3. 在“站点增强”中分别启用 Generic、JavBus、Nyaa、Sukebei、Mikan，设置各自默认目录、默认规则、内联按钮和列表并发数。默认并发为 2，安全上限也是 2；115 文件变更会在后台进一步串行限速。
 4. 回到网页点击按钮或打开弹窗手工粘贴链接。确认窗口里的规则和目录可以覆盖网站默认值。
 5. 在主页的后台任务页查看处理日志、刷新状态或重试失败项；设置页提供“清空日志”，只清除历史记录，不取消进行中的任务，也不清除番组绑定和去重回执。若本地任务状态因目录失效而卡住，可使用“完全重置任务”：它会清除扩展本地任务、处理计划、番组绑定和去重回执，但不会取消 115 云端任务，也不会修改登录、目录或站点设置。
 
@@ -158,7 +160,7 @@ pixi install
 pixi run build    # 校验并生成 dist/extension
 pixi run deploy   # 构建并打开 Chrome 扩展管理页
 pixi run clean    # 清理构建产物
-node --test tests/anime-routing.test.cjs
+node --test tests/*.test.cjs
 ```
 
 源码结构和模块契约见 [`src/README.md`](src/README.md) 与 [`src/chrome-extension/README.md`](src/chrome-extension/README.md)。版本规则和协作约束见 [`AGENTS.md`](AGENTS.md)。

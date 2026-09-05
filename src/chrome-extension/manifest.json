@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "115 Offline Helper",
-  "version": "1.4.2",
+  "version": "1.4.6",
   "description": "Site-adapted magnet/ed2k submission and safe background processing for 115.com.",
   "permissions": [
     "storage",

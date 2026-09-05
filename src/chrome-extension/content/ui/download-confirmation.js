@@ -39,7 +39,8 @@
 		const currentCid = pathUtils.normalizeCid(
 			input.defaultSavePathCid || intents[0]?.savePathCid || siteProfile.defaultSavePathCid || config[keys.SAVE_PATH_CID],
 		) || '0'
-		const concurrency = Math.min(6, Math.max(1, Math.round(Number(input.batchConcurrency || siteProfile.batchConcurrency) || 2)))
+		const maxConcurrency = global.Push115.Config.BATCH_CONCURRENCY_MAX || 2
+		const concurrency = Math.min(maxConcurrency, Math.max(1, Math.round(Number(input.batchConcurrency || siteProfile.batchConcurrency) || 2)))
 		const rootLabel = config[keys.I18N_LOCALE] === 'en-US' ? 'Root' : '根目录'
 		const pathOptions = pathUtils.buildPathOptions(config[keys.SAVE_PATH_LIST] || '', rootLabel)
 		if (!pathOptions.some(item => item.cid === currentCid)) pathOptions.push({ name: '', cid: currentCid })
