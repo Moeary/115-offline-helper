@@ -8,11 +8,17 @@
 	const pathCidOf = folders.pathCidOf || (item => String(item?.cid || item?.id || item?.file_id || ''))
 	const pathNameOf = item => String(item?.name || item?.n || item?.file_name || '')
 	let chain = Promise.resolve()
+	let resetGeneration = 0
 
 	function exclusive(work) {
-		const result = chain.catch(() => {}).then(work)
+		const generation = resetGeneration
+		const result = chain.catch(() => {}).then(() => work(generation))
 		chain = result
 		return result
+	}
+
+	function assertCurrentGeneration(generation) {
+		if (generation !== resetGeneration) throw new Error('本地任务状态已完全重置，请重新提交')
 	}
 
 	async function read() {
@@ -25,7 +31,7 @@
 	}
 
 	async function prepare(details) {
-		return exclusive(async () => {
+		return exclusive(async generation => {
 			const series = seriesApi.normalize(details.series)
 			if (!series) throw new Error('缺少明确的 Mikan 番组信息')
 			const records = await read()
@@ -60,6 +66,7 @@
 				await folders.read(cid)
 			} else throw new Error('不支持的番组归档方式')
 			// Independent of task logs; clearing history must not forget where EP09 belongs.
+			assertCurrentGeneration(generation)
 			const binding = { ...series, cid, name, parentCid, updatedAt: Date.now(), submissions: previous?.submissions || {} }
 			records[series.key] = binding
 			await chrome.storage.local.set({ [STORAGE_KEYS.ANIME_LIBRARY]: records })
@@ -78,7 +85,7 @@
 	}
 
 	async function recordSubmission(intent, taskId) {
-		return exclusive(async () => {
+		return exclusive(async generation => {
 			const records = await read()
 			const key = intent.metadata.animeTarget.seriesKey
 			const binding = records[key]
@@ -88,9 +95,23 @@
 			binding.submissions[hash] = { cid: intent.savePathCid, taskId, at: Date.now() }
 			// Bounded receipt history; bindings themselves are never evicted.
 			binding.submissions = Object.fromEntries(Object.entries(binding.submissions).sort((a, b) => b[1].at - a[1].at).slice(0, 2000))
+			assertCurrentGeneration(generation)
 			await chrome.storage.local.set({ [STORAGE_KEYS.ANIME_LIBRARY]: records })
 		})
 	}
 
-	background.AnimeLibrary = { get, prepare, validateTarget, recordSubmission }
+	async function resetNow(generation) {
+		const records = await read()
+		const seriesCleared = records && typeof records === 'object' ? Object.keys(records).length : 0
+		assertCurrentGeneration(generation)
+		await chrome.storage.local.set({ [STORAGE_KEYS.ANIME_LIBRARY]: {} })
+		return { seriesCleared }
+	}
+
+	function reset() {
+		resetGeneration += 1
+		return exclusive(resetNow)
+	}
+
+	background.AnimeLibrary = { get, prepare, validateTarget, recordSubmission, reset }
 })(globalThis)

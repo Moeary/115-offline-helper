@@ -3,20 +3,28 @@
 	const background = global.Push115.Background
 	const { STORAGE_KEYS } = global.Push115.Config
 	const submissions = new Map()
+	let submissionGeneration = 0
+
+	function assertSubmissionGeneration(generation) {
+		if (generation !== submissionGeneration) throw new Error('本地任务状态已完全重置，请重新提交')
+	}
 
 	async function submitIntent(rawIntent) {
+		const generation = submissionGeneration
 		const intent = global.Push115.DownloadIntent.create(rawIntent)
 		const key = global.Push115.DownloadIntent.dedupeKey(intent.url)
 		const previous = submissions.get(key) || Promise.resolve()
-		const work = previous.catch(() => {}).then(() => submitNormalizedIntent(intent))
+		const work = previous.catch(() => {}).then(() => submitNormalizedIntent(intent, generation))
 		submissions.set(key, work)
 		try { return await work } finally { if (submissions.get(key) === work) submissions.delete(key) }
 	}
 
-	async function submitNormalizedIntent(intent) {
+	async function submitNormalizedIntent(intent, generation = submissionGeneration) {
+		assertSubmissionGeneration(generation)
 		const isBoundAnime = intent.processorProfile === 'anime' && Boolean(intent.metadata.animeTarget)
 		if (isBoundAnime) {
 			const binding = await background.AnimeLibrary.validateTarget(intent)
+			assertSubmissionGeneration(generation)
 			const key = global.Push115.DownloadIntent.dedupeKey(intent.url)
 			const receipt = binding.submissions && typeof binding.submissions === 'object' ? binding.submissions[key] : null
 			const tasks = await background.TaskStore.read()
@@ -26,6 +34,7 @@
 			}
 		}
 		const result = await background.OfflineApi.addTask(intent.url, intent.savePathCid)
+		assertSubmissionGeneration(generation)
 		const config = await chrome.storage.local.get([
 			STORAGE_KEYS.AUTO_DELETE_SMALL,
 			STORAGE_KEYS.AUTO_ORGANIZE,
@@ -42,7 +51,9 @@
 			name: result.name || '',
 			monitor,
 		})
+		assertSubmissionGeneration(generation)
 		if (isBoundAnime) await background.AnimeLibrary.recordSubmission(intent, task.taskId)
+		assertSubmissionGeneration(generation)
 		return { result, task }
 	}
 
@@ -85,6 +96,19 @@
 						return { success: true, target: await background.AnimeLibrary.prepare(details) }
 					case 'CLEAR_LOGS':
 						return { success: true, ...await background.TaskStore.clearLogs() }
+					case 'RESET_RUNTIME': {
+						submissionGeneration += 1
+						submissions.clear()
+						const [tasks, series] = await Promise.all([
+							background.TaskStore.resetRuntime(),
+							background.AnimeLibrary.reset(),
+						])
+						return {
+							success: true,
+							tasksCleared: tasks?.tasksCleared || 0,
+							seriesCleared: series?.seriesCleared || 0,
+						}
+					}
 					case 'RETRY_TASK':
 						return { success: true, task: await background.TaskStore.retry(details.taskId) }
 					case 'REGISTER_CONTENT_SCRIPTS':

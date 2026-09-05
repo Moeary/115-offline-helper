@@ -117,13 +117,45 @@
 		try {
 			const response = await sendMessage('CLEAR_LOGS')
 			await refresh()
-			showSettingsStatus('success', replaceCount(t('clear_logs_success'), response.retained || 0))
+			showTaskStatus('success', replaceCount(t('clear_logs_success'), response.retained || 0))
 		} catch (error) {
-			showSettingsStatus('error', t('clear_logs_failed') + (error?.message || error))
+			showTaskStatus('error', t('clear_logs_failed') + (error?.message || error))
 		} finally {
 			if (button) button.disabled = false
 		}
 	}
 
-	global.Push115.OptionsTasks = { render, refresh, clearLogs }
+	function showTaskStatus(type, message) {
+		const area = document.getElementById('push115-log-status') || document.getElementById('push115-settings-status')
+		if (!area) return
+		area.className = `push115-status ${type || ''}`
+		area.textContent = message || ''
+	}
+
+	function replaceResetCounts(text, tasks, series) {
+		return String(text || '')
+			.replace('{tasks}', String(tasks || 0))
+			.replace('{series}', String(series || 0))
+	}
+
+	async function completeReset() {
+		if (!window.confirm(t('confirm_complete_reset'))) return
+		const button = document.getElementById('push115-complete-reset')
+		if (button) button.disabled = true
+		try {
+			const response = await sendMessage('RESET_RUNTIME')
+			await refresh()
+			showTaskStatus('success', replaceResetCounts(
+				t('complete_reset_success'),
+				response.tasksCleared,
+				response.seriesCleared,
+			))
+		} catch (error) {
+			showTaskStatus('error', t('complete_reset_failed') + (error?.message || error))
+		} finally {
+			if (button) button.disabled = false
+		}
+	}
+
+	global.Push115.OptionsTasks = { render, refresh, clearLogs, completeReset }
 })(globalThis)

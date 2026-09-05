@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.3.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.4.2-orange" alt="Version">
 </p>
 
 ---
@@ -57,6 +57,8 @@ Nyaa, Sukebei and Mikan share one confirmation dialog and one rate-limited queue
 | `anime` | Keeps torrent names and directory semantics; batch/Mikan archive moves identified video/subtitle files into the chosen destination | No JAV rename and no guessed show/episode names |
 
 Subtitle extensions are protected by default, image/NFO cleanup is opt-in, and every remote move/rename/recycle is verified with explicit CID/FID values. Unknown files, collisions and inconsistent directory responses stay in place for a later retry.
+
+Mikan also handles a common 115 layout where the wrapper folder has exactly the same name as its video. Instead of relying on a rename that may be rejected, the processor creates a task-specific `__push115_stage_*` folder inside the destination, stages the explicit file IDs there, verifies and recycles the empty wrapper, then moves files back and recycles the staging folder. The plan persists the staging CID and file IDs so retries do not recreate it. A real same-name file already in the destination remains a collision and is never overwritten.
 
 ### Mikan series memory
 
@@ -105,7 +107,7 @@ Download the latest archive from [Releases](https://github.com/gangz1o/115-offli
 2. Maintain the shared 115 directory catalog in Settings. Site profiles and the confirmation dialog select from this catalog; legacy `Name:CID` entries are migrated automatically.
 3. Enable and configure Generic, JavBus, Nyaa, Sukebei and Mikan separately. Set defaults, inline controls, batch controls and concurrency (default 2, maximum 6).
 4. Push from a page or paste multiple links in the popup. The dialog can override both the site profile and destination.
-5. Inspect, refresh or retry tasks from the background task page. **Clear logs** removes history only; it keeps active tasks, series bindings and deduplication receipts.
+5. Inspect, refresh or retry tasks from the background task page. **Clear logs** removes history only; it keeps active tasks, series bindings and deduplication receipts. If stale local state is blocking new submissions, use **Complete task reset**: it clears local tasks, processing plans, series bindings and dedupe receipts, while leaving 115 cloud tasks, login, directories and site settings untouched.
 
 Generic uses optional `<all_urls>` permission. Dedicated site enhancements use their own host permissions. OpenBT has no separate profile and follows Generic when that permission is enabled.
 

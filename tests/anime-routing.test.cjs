@@ -10,7 +10,8 @@ function environment(saved = {}, disk = null) {
 	const tree = disk || new Map([['0', { name: 'Root', parent: '', items: [] }], ['10', { name: 'Anime', parent: '0', items: [] }]])
 	if (!disk) tree.get('0').items.push({ cid: '10', n: 'Anime' })
 	let serial = 100
-	const calls = { move: [], remove: [], create: [], offline: [] }
+	let runtimeMessageListener = null
+	const calls = { move: [], remove: [], create: [], rename: [], offline: [] }
 	const faults = { remove: false, move: false, fallback: '', state: true, pageSize: 500 }
 	function folder(parent, name, id = String(serial++)) {
 		tree.set(id, { name, parent, items: [] })
@@ -33,6 +34,17 @@ function environment(saved = {}, disk = null) {
 			return { state: faults.state, path: crumbs, count: node.items.length, data: structuredClone(node.items.slice(offset, offset + faults.pageSize)) }
 		},
 		async createFolder(parent, name) { calls.create.push({ parent, name }); return { state: true, cid: folder(parent, name) } },
+		async rename(fid, name) {
+			calls.rename.push({ fid: String(fid), name })
+			const node = tree.get(String(fid))
+			if (!node) return { state: false }
+			const parent = tree.get(node.parent)
+			if (parent.items.some(item => String(item.cid || item.fid || item.file_id || '') !== String(fid) && String(item.n || item.name || '').toLowerCase() === String(name).toLowerCase())) return { state: false }
+			node.name = name
+			const entry = parent.items.find(item => String(item.cid || item.fid || item.file_id || '') === String(fid))
+			if (entry) entry.n = name
+			return { state: true }
+		},
 		async move(fid, cid) {
 			calls.move.push(fid)
 			if (faults.move) { faults.move = false; return { state: false } }
@@ -67,7 +79,7 @@ function environment(saved = {}, disk = null) {
 				},
 				async set(values) { Object.assign(data, structuredClone(values)) },
 			} },
-			runtime: { sendMessage: async () => ({}), onMessage: { addListener() {} } },
+			runtime: { sendMessage: async () => ({}), onMessage: { addListener(listener) { runtimeMessageListener = listener } } },
 			alarms: { get: async () => true, create: async () => {} },
 		},
 	})
@@ -81,7 +93,11 @@ function environment(saved = {}, disk = null) {
 	// Explicitly run monitors in tests; queue's wakeup still follows the production contract.
 	context.Push115.Background.TaskMonitor.processPending = async () => {}
 	load('content/ui/submission-queue.js')
-	return { context, p: context.Push115, bg: context.Push115.Background, data, tree, folder, file, calls, faults }
+	const invokeMessage = request => new Promise((resolve, reject) => {
+		if (!runtimeMessageListener) return reject(new Error('runtime message listener is not registered'))
+		runtimeMessageListener(request, {}, resolve)
+	})
+	return { context, p: context.Push115, bg: context.Push115.Background, data, tree, folder, file, calls, faults, invokeMessage }
 }
 
 const series = { key: 'mikan:2087', title: 'Example Season 2', pageUrl: 'https://mikan.tangbai.cc/Home/Bangumi/2087' }
@@ -156,6 +172,95 @@ test('same-name collision and failed move keep source and do not report completi
 	assert.equal(e.calls.move.length, 0); assert.equal(e.calls.remove.length, 0); assert.equal(task.animeTransfer.finished, false)
 })
 
+test('same-name wrapper folder is staged before moving its media into the series directory', async () => {
+	const e = environment(); const target = await prepare(e)
+	const name = '[NEST] Chainsmoker Cat - 03 [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv'
+	const root = e.folder(target.cid, name, '300'); e.file(root, name, '301')
+	const task = { ...intent(3, target), taskId: 'same-wrapper' }
+	const messages = await e.bg.Processors.anime.process({ task, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	assert.equal(e.calls.rename.length, 0)
+	assert.equal(e.calls.create.length, 2)
+	assert.match(e.calls.create[1].name, /^__push115_stage_/)
+	assert.equal(e.tree.has(root), false)
+	assert.deepEqual(e.tree.get(target.cid).items.filter(x => x.sha).map(x => x.n), [name])
+	assert.match(messages.join(), /已按原名归档/)
+})
+
+test('a batch of same-name wrappers is staged and flattened without leftover directories', async () => {
+	const e = environment(); const target = await prepare(e)
+	const names = Array.from({ length: 9 }, (_, index) => `[NEST] Chainsmoker Cat - ${String(index + 1).padStart(2, '0')} [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv`)
+	const roots = names.map((name, index) => {
+		const root = e.folder(target.cid, name, String(400 + index * 2))
+		e.file(root, name, String(401 + index * 2))
+		return root
+	})
+	for (const [index, root] of roots.entries()) {
+		const task = { ...intent(index + 1, target), taskId: 'same-wrapper-batch-' + index }
+		await e.bg.Processors.anime.process({ task, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	}
+	assert.equal(e.calls.rename.length, 0)
+	assert.ok(roots.every(root => !e.tree.has(root)))
+	assert.equal(e.tree.get(target.cid).items.filter(item => item.sha).length, names.length)
+	assert.equal(e.tree.get(target.cid).items.filter(item => item.sha).some(item => item.n.startsWith('__push115_stage_')), false)
+})
+
+test('a nested same-name wrapper is detected through the explicit task path', async () => {
+	const e = environment(); const target = await prepare(e)
+	const name = '[NEST] Chainsmoker Cat - 10 [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv'
+	const outer = e.folder(target.cid, 'release-10', '450')
+	const inner = e.folder(outer, name, '451')
+	e.file(inner, name, '452')
+	const task = { ...intent(10, target), taskId: 'nested-same-wrapper' }
+	await e.bg.Processors.anime.process({ task, targetCid: outer, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	assert.equal(e.tree.has(inner), false)
+	assert.equal(e.tree.has(outer), false)
+	assert.deepEqual(e.tree.get(target.cid).items.filter(item => item.sha).map(item => item.n), [name])
+})
+
+test('staged wrapper resumes after a move retry without recreating its temporary directory', async () => {
+	let e = environment(); const target = await prepare(e)
+	const name = '[NEST] Chainsmoker Cat - 03 [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv'
+	const root = e.folder(target.cid, name, '310'); e.file(root, name, '311')
+	const task = { ...intent(3, target), taskId: 'same-wrapper-retry' }
+	e.faults.move = true
+	await assert.rejects(e.bg.Processors.anime.process({ task, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog }), /115 拒绝移动到临时目录/)
+	assert.equal(e.calls.rename.length, 0)
+	assert.equal(e.calls.create.length, 2)
+	assert.ok(e.data.push115_tasks[0].animeTransfer.staging.cid)
+
+	e = environment(e.data, e.tree)
+	const resumed = (await e.bg.TaskStore.read())[0]
+	await e.bg.Processors.anime.process({ task: resumed, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	assert.equal(e.calls.rename.length, 0)
+	assert.equal(e.calls.create.length, 0)
+	assert.equal(e.tree.has(root), false)
+	assert.deepEqual(e.tree.get(target.cid).items.filter(x => x.sha).map(x => x.n), [name])
+})
+
+test('a failed 1.3.x rename marker is upgraded to file staging on the next retry', async () => {
+	const e = environment(); const target = await prepare(e)
+	const name = '[NEST] Chainsmoker Cat - 06 [NF WEB-DL 1080p AVC AAC][JPSC_JPTC].mkv'
+	const root = e.folder(target.cid, name, '320'); const video = e.file(root, name, '321')
+	const task = {
+		...intent(6, target), taskId: 'legacy-marker',
+		animeTransfer: {
+			version: 1,
+			sourceCid: root,
+			destinationCid: target.cid,
+			folders: [{ cid: root, parentCid: target.cid, depth: 0 }],
+			files: [{ fid: video.fid, name, parentCid: root }],
+			staging: { originalName: name, name: '__push115_tmp_legacy-marker' },
+			finished: false,
+		},
+	}
+	await e.bg.Processors.anime.process({ task, targetCid: root, folderResolved: true, config: {}, appendLog: e.bg.TaskStore.appendLog })
+	assert.equal(e.calls.rename.length, 0)
+	assert.equal(e.calls.create.length, 2)
+	assert.match(e.calls.create[1].name, /^__push115_stage_/)
+	assert.equal(e.tree.has(root), false)
+	assert.deepEqual(e.tree.get(target.cid).items.filter(x => x.sha).map(x => x.n), [name])
+})
+
 test('deleted bound directory / 115 root fallback never creates replacement or submits a download', async () => {
 	const e = environment(); const target = await prepare(e)
 	e.faults.fallback = target.cid
@@ -180,6 +285,29 @@ test('concurrent repeated hash is skipped; clearing logs keeps mapping and recei
 	assert.equal((await e.bg.Router.submitIntent(intent(1, target))).duplicate, true)
 	const retry = intent(1, target); retry.metadata.skipSubmitted = false
 	await e.bg.Router.submitIntent(retry); assert.equal(e.calls.offline.length, 2)
+})
+
+test('complete runtime reset clears local tasks and Mikan bindings; stale monitor state cannot return', async () => {
+	const e = environment(); const target = await prepare(e)
+	const task = { ...intent(1, target), taskId: 'stale-reset', createdAt: Date.now(), status: 'waiting' }
+	await e.bg.TaskStore.persist(task)
+	assert.equal((await e.bg.TaskStore.read()).length, 1)
+
+	// Exercise the same message route used by the options page. The router
+	// invokes both local stores together and invalidates in-flight submissions.
+	e.bg.Router.listen()
+	const result = await e.invokeMessage({ action: 'RESET_RUNTIME', details: {} })
+	assert.equal(result.success, true)
+	assert.equal(result.tasksCleared, 1)
+	assert.equal(result.seriesCleared, 1)
+	assert.deepEqual(e.data.push115_tasks, [])
+	assert.deepEqual(e.data.push115_anime_library, {})
+
+	// A monitor that was already holding the pre-reset object must not write it
+	// back after the reset completes.
+	task.status = 'processing'
+	await e.bg.TaskStore.persist(task)
+	assert.deepEqual(e.data.push115_tasks, [])
 })
 
 test('concurrent persistence retains all active tasks, including more than the old 50-task limit', async () => {

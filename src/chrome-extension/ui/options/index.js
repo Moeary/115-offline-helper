@@ -86,6 +86,10 @@ const I18N_STRINGS = {
 		confirm_clear_logs: '确定清空已完成、失败和已记录的历史日志吗？等待中或处理中的任务会保留。',
 		clear_logs_success: '日志已清空，保留 {count} 个进行中的任务。',
 		clear_logs_failed: '清空日志失败：',
+		complete_reset_button: '完全重置任务',
+		confirm_complete_reset: '确定完全重置扩展本地任务吗？这会清除全部任务记录、处理计划、Mikan 番组绑定和去重回执；不会取消 115 云端任务，也不会修改登录信息、目录或站点设置。',
+		complete_reset_success: '已清除本地任务 {tasks} 条、番组绑定 {series} 个。115 云端任务未受影响。',
+		complete_reset_failed: '完全重置失败：',
 		refresh_button: '刷新',
 		logs_empty: '暂无后台任务日志',
 		logs_summary: '共 {count} 条任务记录',
@@ -150,6 +154,10 @@ const I18N_STRINGS = {
 		confirm_clear_logs: 'Clear completed, failed, and recorded history logs? Waiting or processing tasks will be kept.',
 		clear_logs_success: 'Logs cleared; {count} active task(s) retained.',
 		clear_logs_failed: 'Failed to clear logs: ',
+		complete_reset_button: 'Complete task reset',
+		confirm_complete_reset: 'Reset all local extension task state? This clears task records, processing plans, Mikan series bindings, and dedupe receipts. It does not cancel 115 cloud tasks or change login, directories, or site settings.',
+		complete_reset_success: 'Cleared {tasks} local task(s) and {series} series binding(s). 115 cloud tasks were not changed.',
+		complete_reset_failed: 'Complete reset failed: ',
 		refresh_button: 'Refresh',
 		logs_empty: 'No background task logs yet',
 		logs_summary: '{count} task records',
@@ -365,6 +373,7 @@ function bindEvents() {
 	document.getElementById('push115-save-dirs-input').addEventListener('change', () => renderSavePathSelectors(true))
 	document.getElementById('push115-refresh-logs').addEventListener('click', Push115.OptionsTasks.refresh)
 	document.getElementById('push115-clear-logs').addEventListener('click', Push115.OptionsTasks.clearLogs)
+	document.getElementById('push115-complete-reset').addEventListener('click', Push115.OptionsTasks.completeReset)
 	document.getElementById('push115-language-select').addEventListener('change', event => {
 		configCache[CONFIG_KEYS.I18N_LOCALE] = event.target.value
 		applyLocale()

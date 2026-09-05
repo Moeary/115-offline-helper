@@ -3,6 +3,22 @@
 	const { STORAGE_KEYS, normalizeCid, normalizeProcessorProfile } = global.Push115.Config
 	const intentApi = global.Push115.DownloadIntent
 	let writes = Promise.resolve()
+	// A reset invalidates task objects that were already loaded by a monitor or
+	// submission before the user pressed the reset button.  WeakMap keeps this
+	// generation marker out of the persisted task schema.
+	let resetGeneration = 0
+	const taskGenerations = new WeakMap()
+
+	function rememberTask(task) {
+		if (task && typeof task === 'object' && !taskGenerations.has(task)) taskGenerations.set(task, resetGeneration)
+		return task
+	}
+
+	function rememberTasks(tasks) {
+		for (const task of tasks) rememberTask(task)
+		return tasks
+	}
+
 	function serialized(work) {
 		const result = writes.catch(() => {}).then(work)
 		writes = result
@@ -28,7 +44,7 @@
 
 	async function read() {
 		const data = await chrome.storage.local.get(STORAGE_KEYS.TASKS)
-		return Array.isArray(data[STORAGE_KEYS.TASKS]) ? data[STORAGE_KEYS.TASKS] : []
+		return rememberTasks(Array.isArray(data[STORAGE_KEYS.TASKS]) ? data[STORAGE_KEYS.TASKS] : [])
 	}
 
 	async function clearLogsNow() {
@@ -53,8 +69,31 @@
 		Promise.resolve(chrome.runtime.sendMessage({ action: 'TASK_UPDATED', task })).catch(() => {})
 	}
 
-	const persist = task => serialized(() => persistNow(task))
+	function persist(task) {
+		if (!task || typeof task !== 'object') return Promise.resolve({ skipped: true })
+		const generation = rememberTask(task) && taskGenerations.get(task)
+		return serialized(() => {
+			if (generation !== resetGeneration) return { skipped: true, reset: true }
+			return persistNow(task)
+		})
+	}
+
 	const clearLogs = () => serialized(clearLogsNow)
+
+	async function resetRuntimeNow() {
+		const records = await read()
+		const tasksCleared = records.length
+		// Keep the storage shape stable for older Chrome/test shims that do not
+		// implement storage.local.remove.  This clears every local task record;
+		// the router clears the independent Anime library in the same operation.
+		await chrome.storage.local.set({ [STORAGE_KEYS.TASKS]: [] })
+		return { tasksCleared }
+	}
+
+	function resetRuntime() {
+		resetGeneration += 1
+		return serialized(resetRuntimeNow)
+	}
 
 	function normalizeLegacyIntent(details = {}) {
 		const input = details.intent && typeof details.intent === 'object' ? details.intent : details
@@ -94,6 +133,7 @@
 			(intent.url && (task.url === intent.url || task.magnet === intent.url))
 		))
 		const task = existing || { taskId: makeTaskId(), createdAt: now, attempts: 0, logs: [] }
+		rememberTask(task)
 
 		Object.assign(task, {
 			remoteId: remoteId || task.remoteId || '',
@@ -138,5 +178,15 @@
 		return task
 	}
 
-	global.Push115.Background.TaskStore = { read, persist, clearLogs, queue, retry, taskIsActive, appendLog, normalizeLegacyIntent }
+	global.Push115.Background.TaskStore = {
+		read,
+		persist,
+		clearLogs,
+		resetRuntime,
+		queue,
+		retry,
+		taskIsActive,
+		appendLog,
+		normalizeLegacyIntent,
+	}
 })(globalThis)
