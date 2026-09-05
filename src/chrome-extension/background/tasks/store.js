@@ -2,6 +2,12 @@
 	'use strict'
 	const { STORAGE_KEYS, normalizeCid, normalizeProcessorProfile } = global.Push115.Config
 	const intentApi = global.Push115.DownloadIntent
+	let writes = Promise.resolve()
+	function serialized(work) {
+		const result = writes.catch(() => {}).then(work)
+		writes = result
+		return result
+	}
 
 	function makeTaskId() {
 		if (global.crypto?.randomUUID) return global.crypto.randomUUID()
@@ -25,7 +31,7 @@
 		return Array.isArray(data[STORAGE_KEYS.TASKS]) ? data[STORAGE_KEYS.TASKS] : []
 	}
 
-	async function clearLogs() {
+	async function clearLogsNow() {
 		const records = await read()
 		// Keep waiting/processing tasks intact so clearing history never cancels
 		// persistent downloads. Completed, failed, and recorded task entries are
@@ -36,16 +42,19 @@
 		return { removed, retained: active.length }
 	}
 
-	async function persist(task) {
+	async function persistNow(task) {
 		const tasks = await read()
 		const index = tasks.findIndex(item => item.taskId === task.taskId)
 		if (index >= 0) tasks[index] = task
 		else tasks.unshift(task)
 		const active = tasks.filter(taskIsActive).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
 		const history = tasks.filter(item => !taskIsActive(item)).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-		await chrome.storage.local.set({ [STORAGE_KEYS.TASKS]: [...active.slice(0, 50), ...history.slice(0, 50)] })
+		await chrome.storage.local.set({ [STORAGE_KEYS.TASKS]: [...active, ...history.slice(0, 50)] })
 		Promise.resolve(chrome.runtime.sendMessage({ action: 'TASK_UPDATED', task })).catch(() => {})
 	}
+
+	const persist = task => serialized(() => persistNow(task))
+	const clearLogs = () => serialized(clearLogsNow)
 
 	function normalizeLegacyIntent(details = {}) {
 		const input = details.intent && typeof details.intent === 'object' ? details.intent : details

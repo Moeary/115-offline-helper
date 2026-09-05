@@ -16,7 +16,10 @@
 	}
 
 	function getRemoteTaskFolderCid(task) {
-		return String(task?.file_id || task?.fileId || task?.dir_id || task?.dirId || task?.wppath_id || '').trim()
+		// 115's task list normally exposes file_id; older responses use cid or
+		// wppath_id. Keep all known aliases so a completed task can still be
+		// located after a service-worker restart.
+		return String(task?.file_id || task?.fileId || task?.dir_id || task?.dirId || task?.wppath_id || task?.cid || '').trim()
 	}
 
 	function remoteTaskMatches(remoteTask, task) {
@@ -65,7 +68,7 @@
 	function processorNeedsWork(profile, config, task = null) {
 		// 批量 anime 需要在下载完成后把各任务目录扁平化到同一保存目录，
 		// 即使用户关闭了常规垃圾清理，也必须保留这项明确的批量整理。
-		if (profile === 'anime' && task?.metadata?.batchId) return true
+		if (global.Push115.AnimeSeries.needsFlatten(task)) return true
 		if (profile === 'jav') return config.push115_auto_delete_small === true || config.push115_auto_organize === true
 		return ['generic', 'anime'].includes(profile) && config.push115_auto_delete_small === true
 	}
@@ -98,8 +101,17 @@
 		}
 
 		task.attempts = Number(task.attempts || 0) + 1
+		// Resume from the persisted file IDs even after the offline record or the
+		// now-empty source directory disappears. Never fall back to library-wide cleanup.
+		if (profile === 'anime' && task.animeTransfer) {
+			await finishProcessing(task, task.animeTransfer.sourceCid, true, config, profile)
+			return
+		}
 		const remoteTasks = await offlineApi.getTasks()
-		const remoteTask = remoteTasks.find(item => remoteTaskMatches(item, task))
+		const flatten = global.Push115.AnimeSeries.needsFlatten(task)
+		const remoteTask = remoteTasks.find(item => flatten && task.remoteId
+			? getRemoteTaskId(item).toLowerCase() === task.remoteId.toLowerCase()
+			: remoteTaskMatches(item, task))
 		if (!remoteTask) {
 			task.status = 'waiting'
 			task.message = `等待 115 任务出现（第 ${task.attempts} 次检查）`
@@ -131,6 +143,31 @@
 			return
 		}
 
+		if (flatten) {
+			const folders = global.Push115.Background.Folders
+			const items = (await folders.read(task.savePathCid)).items
+			const remoteCid = getRemoteTaskFolderCid(remoteTask)
+			let source = items.find(item => folders.isFolder(item) && folders.cidOf(item) === remoteCid)
+			if (!source) {
+				const exact = items.filter(item => folders.isFolder(item) && folders.nameOf(item) === task.remoteName)
+				if (exact.length === 1) source = exact[0]
+			}
+			if (!source) {
+				// Some single-file torrents already arrive directly in the chosen folder.
+				const direct = items.find(item => item.sha && String(item.fid || item.file_id || '') === remoteCid)
+				if (direct) {
+					task.status = 'completed'
+					task.completedAt = task.updatedAt = Date.now()
+					task.message = '视频已直接保存在目标目录，无需移动'
+					store.appendLog(task, task.message)
+					return
+				}
+				throw new Error('未明确定位到本任务目录，保留文件等待重试')
+			}
+			await finishProcessing(task, folders.cidOf(source), true, config, profile)
+			return
+		}
+
 		let folderCid = String(task.remoteFolderCid || '').trim() || getRemoteTaskFolderCid(remoteTask)
 		let folderResolved = false
 		if (folderCid) {
@@ -150,13 +187,16 @@
 		}
 		const targetCid = folderCid || await ensureUsableCid(task.savePathCid)
 		if (!targetCid) throw new Error('未找到下载完成后的 115 目录')
+		await finishProcessing(task, targetCid, folderResolved, config, profile)
+	}
 
+	async function finishProcessing(task, targetCid, folderResolved, config, profile) {
 		task.status = 'processing'
 		task.remoteFolderCid = folderResolved ? targetCid : ''
 		task.updatedAt = Date.now()
 		store.appendLog(task, `离线下载完成，开始执行 ${profile} 后处理`)
 		const processor = processors[profile] || processors.generic
-		const messages = await processor.process({ task, targetCid, folderResolved, config, appendLog: store.appendLog })
+		const messages = await processor.process({ task, targetCid, folderResolved, config, appendLog: store.appendLog, checkpoint: () => store.persist(task) })
 		task.status = 'completed'
 		task.completedAt = Date.now()
 		task.message = messages.length > 0 ? messages.join('，') : '处理完成，未发现需要修改的文件'

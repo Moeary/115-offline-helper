@@ -24,6 +24,7 @@
 - 🔍 **Auto-detect links** — Detect magnet and ed2k links on any web page (opt-in)
 - 🧩 **Site adapters** — Profiles for Generic, JavBus, Nyaa/Sukebei, and Mikan; OpenBT uses Generic
 - 📺 **List batch submission** — Nyaa, Sukebei, and Mikan support selected/all submission, BTIH deduplication, bounded concurrency, and per-item progress
+- 🗂️ **Mikan series memory** — Bind a Mikan `/Home/Bangumi/<ID>` page to a 115 CID once; completed shows can be submitted together and later episodes reuse the same destination
 - 📥 **Unified confirmation** — Page buttons, batches, and manual multi-line input share editable links, save directory, and processor selection
 - 📁 **Custom save directory** — Choose which 115 folder to save downloads to
 - 🗑️ **Safe junk cleanup** — Remove obvious HTML/TXT attachments and small ad videos; subtitles are protected and image/NFO cleanup is off by default
@@ -109,6 +110,7 @@ After source changes, run `pixi run deploy` again and click **Reload** on the ex
 | Auto-detect links | Detect links on all pages via content script |
 | Site enhancements | Configure enabled state, default save directory (selected from the directory list), processor profile, and page controls for Generic, JavBus, Nyaa, Sukebei, and Mikan |
 | List batches | Nyaa, Sukebei, and Mikan default to concurrency 2; failures are isolated and every batch uses unified confirmation |
+| Mikan series archive | First use can create/reuse a series folder or bind the selected folder; later episodes reuse the remembered CID, preserving torrent names and removing only verified-empty task folders |
 | Log cleanup | Clear completed, failed, and recorded history from Settings; active tasks are retained |
 | Background task manager | Open the Task manager tab from Home to inspect logs and retry failures |
 | Junk extension rules | Edit junk, protected, and optional cleanup extensions in the full settings page |
@@ -118,7 +120,7 @@ After source changes, run `pixi run deploy` again and click **Reload** on the ex
 
 > By default, `.url/.html/.htm/.txt/.exe/.bat/.cmd/.torrent` are treated as explicit junk, while `.srt/.ass/.ssa/.sup/.vtt` are protected. Image/poster and `.nfo` cleanup is disabled by default. If an extension appears in both lists, the protected list wins.
 
-> Each task carries an explicit `processorProfile`: `generic` performs safe cleanup only, `jav` may apply code-based renaming, and `anime` preserves torrent names by default. Anime tasks submitted together from one confirmation dialog move video/subtitle files into the selected save directory after completion and delete only verified-empty task folders; no forced series renaming or extra folder is created. The confirmation dialog can override every site's default.
+> Each task carries an explicit `processorProfile`: `generic` performs safe cleanup only, `jav` may apply code-based renaming, and `anime` preserves torrent names by default. Anime tasks submitted together from one confirmation dialog, or bound to a Mikan series, move video/subtitle files into the remembered save directory after completion and delete only verified-empty task folders; the file-ID plan resumes after worker restarts and never forces series renaming. The confirmation dialog can override every site's default.
 
 ## ❓ FAQ
 

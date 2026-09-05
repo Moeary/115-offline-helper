@@ -45,7 +45,7 @@
 				onStatus(entry, entry.status)
 				try {
 					entry.response = await global.Push115.Messaging.send('SUBMIT_INTENT', { intent: entry.intent })
-					entry.status = 'success'
+					entry.status = entry.response?.duplicate ? 'duplicate' : 'success'
 				} catch (error) {
 					entry.error = error
 					entry.status = 'failed'

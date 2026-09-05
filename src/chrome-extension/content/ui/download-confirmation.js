@@ -119,6 +119,22 @@
 
 		const sourceByKey = new Map()
 		for (const intent of intents) sourceByKey.set(intentApi.dedupeKey(intent.url), intent)
+		confirm.disabled = true
+		confirm.textContent = '读取番组目录…'
+		const routing = await content.AnimeRouting.create(intents, pathSelect)
+		body.appendChild(routing.element)
+		let submitting = false
+
+		function intentForRow(row) {
+			// Editing trackers keeps identity through BTIH; an unrelated pasted URL
+			// must not inherit the first row's series/code/title.
+			const original = sourceByKey.get(row.key) || {
+				sourceSite, mediaType: 'generic', title: intentApi.extractDisplayName(row.url), code: '', metadata: {},
+			}
+			const { animeTarget, skipSubmitted, ...metadata } = original.metadata || {}
+			return intentApi.create({ ...original, metadata, url: row.url,
+				savePathCid: pathSelect.value, processorProfile: processorSelect.value })
+		}
 
 		function renderValidation() {
 			const rows = intentApi.parseLines(textarea.value)
@@ -136,38 +152,45 @@
 				message.textContent = rowLabel(row)
 				validation.appendChild(message)
 			}
-			confirm.disabled = valid === 0 || invalid.length > 0
+			confirm.disabled = submitting || valid === 0 || invalid.length > 0
 			confirm.textContent = valid > 1 ? `提交 ${valid} 个任务` : '提交下载任务'
 			warning.textContent = profileWarning(processorSelect.value, intents)
+			routing.update(processorSelect.value, rows.filter(row => row.status === 'valid').map(intentForRow))
 			return rows
 		}
 
 		textarea.addEventListener('input', renderValidation)
 		processorSelect.addEventListener('change', renderValidation)
-		cancel.addEventListener('click', () => overlay.remove())
-		overlay.addEventListener('click', event => { if (event.target === overlay) overlay.remove() })
+		cancel.addEventListener('click', () => { if (!submitting) overlay.remove() })
+		overlay.addEventListener('click', event => { if (event.target === overlay && !submitting) overlay.remove() })
 		confirm.addEventListener('click', async () => {
 			const rows = renderValidation()
 			if (confirm.disabled) return
-			const selectedProfile = processorSelect.value
-			const savePathCid = pathUtils.normalizeCid(pathSelect.value) || currentCid
-			const template = intents[0] || {
-				sourceSite,
-				mediaType: 'generic',
-				title: '',
-				code: '',
-				metadata: { pageUrl: input.pageUrl || '' },
+			submitting = true
+			for (const control of body.querySelectorAll('input, select, textarea')) control.disabled = true
+			cancel.disabled = true
+			confirm.disabled = true
+			confirm.textContent = '确认归档目录…'
+			let prepared
+			try { prepared = await routing.prepare() }
+			catch (error) {
+				submitting = false
+				for (const control of body.querySelectorAll('input, select, textarea')) control.disabled = false
+				cancel.disabled = false
+				renderValidation()
+				warning.textContent = `目录准备失败：${error.message}`
+				return
 			}
 			const queueItems = rows.filter(row => row.status === 'valid').map(row => {
-				const original = sourceByKey.get(row.key) || template
+				const original = intentForRow(row)
 				return {
 					key: `line-${row.line}`,
 					intent: intentApi.create({
 						...original,
-						url: row.url,
-						title: original.title || intentApi.extractDisplayName(row.url),
-						savePathCid,
-						processorProfile: selectedProfile,
+						...(prepared ? {
+							savePathCid: prepared.target.cid,
+							metadata: { ...original.metadata, animeTarget: prepared.target, skipSubmitted: prepared.skipSubmitted },
+						} : {}),
 					}),
 				}
 			})

@@ -19,6 +19,7 @@
 		CLEAN_NFO: 'push115_clean_nfo',
 		SITE_PROFILES: 'push115_site_profiles',
 		TASKS: 'push115_tasks',
+		ANIME_LIBRARY: 'push115_anime_library',
 	})
 
 	const SITE_DEFINITIONS = Object.freeze({

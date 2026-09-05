@@ -10,7 +10,10 @@
 	function extractPageMetadata() {
 		const heading = document.querySelector('.bangumi-title, .bangumi-info h1, main h1, h1')
 		const title = (heading?.textContent || document.querySelector('meta[property="og:title"]')?.content || document.title).trim()
-		return { title, code: '', pageCode: '', pageUrl: location.href, bangumiId: location.pathname.match(/\/Bangumi\/(\d+)/i)?.[1] || '' }
+		// Live DOM checked 2026-09-05: p.bangumi-title on /Home/Bangumi/<id>.
+		// Identity is the page ID, never an episode number or release title.
+		const series = global.Push115.AnimeSeries.fromPage(location.href, heading?.textContent || '')
+		return { title, code: '', pageCode: '', pageUrl: location.href, series, bangumiId: location.pathname.match(/\/Bangumi\/(\d+)/i)?.[1] || '' }
 	}
 
 	function magnetFrom(element) {

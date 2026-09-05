@@ -6,9 +6,9 @@
 		return result?.state === true || result?.state === 1 || result?.state === '1'
 	}
 
-	async function list(cid = '0') {
+	async function list(cid = '0', offset = 0) {
 		return client.data({
-			url: `https://webapi.115.com/files?aid=1&cid=${cid}&o=user_ptime&asc=0&offset=0&show_dir=1&limit=500&snap=0&natsort=1`,
+			url: `https://webapi.115.com/files?aid=1&cid=${cid}&o=user_ptime&asc=0&offset=${offset}&show_dir=1&limit=500&snap=0&natsort=1`,
 			method: 'GET',
 		})
 	}

@@ -2,17 +2,35 @@
 	'use strict'
 	const background = global.Push115.Background
 	const { STORAGE_KEYS } = global.Push115.Config
+	const submissions = new Map()
 
 	async function submitIntent(rawIntent) {
 		const intent = global.Push115.DownloadIntent.create(rawIntent)
+		const key = global.Push115.DownloadIntent.dedupeKey(intent.url)
+		const previous = submissions.get(key) || Promise.resolve()
+		const work = previous.catch(() => {}).then(() => submitNormalizedIntent(intent))
+		submissions.set(key, work)
+		try { return await work } finally { if (submissions.get(key) === work) submissions.delete(key) }
+	}
+
+	async function submitNormalizedIntent(intent) {
+		const isBoundAnime = intent.processorProfile === 'anime' && Boolean(intent.metadata.animeTarget)
+		if (isBoundAnime) {
+			const binding = await background.AnimeLibrary.validateTarget(intent)
+			const key = global.Push115.DownloadIntent.dedupeKey(intent.url)
+			const receipt = binding.submissions && typeof binding.submissions === 'object' ? binding.submissions[key] : null
+			const tasks = await background.TaskStore.read()
+			const existing = tasks.find(task => task.savePathCid === intent.savePathCid && global.Push115.DownloadIntent.dedupeKey(task.url || task.magnet) === key)
+			if (intent.metadata.skipSubmitted !== false && ((receipt?.cid === intent.savePathCid && existing?.status !== 'failed') || (existing && ['waiting', 'processing', 'completed'].includes(existing.status)))) {
+				return { duplicate: true, message: '本番已提交过此磁链；可在任务日志中重试' }
+			}
+		}
 		const result = await background.OfflineApi.addTask(intent.url, intent.savePathCid)
 		const config = await chrome.storage.local.get([
 			STORAGE_KEYS.AUTO_DELETE_SMALL,
 			STORAGE_KEYS.AUTO_ORGANIZE,
 		])
-		const isAnimeBatch = intent.mediaType === 'anime'
-			&& intent.processorProfile === 'anime'
-			&& Boolean(intent.metadata?.batchId)
+		const isAnimeBatch = global.Push115.AnimeSeries.needsFlatten(intent)
 		const monitor = isAnimeBatch
 			? true
 			: intent.processorProfile === 'jav'
@@ -24,6 +42,7 @@
 			name: result.name || '',
 			monitor,
 		})
+		if (isBoundAnime) await background.AnimeLibrary.recordSubmission(intent, task.taskId)
 		return { result, task }
 	}
 
@@ -60,6 +79,10 @@
 						return { success: true, task: await background.TaskStore.queue(details) }
 					case 'GET_TASKS':
 						return { success: true, tasks: await background.TaskStore.read() }
+					case 'GET_ANIME_SERIES':
+						return { success: true, binding: await background.AnimeLibrary.get(details.key) }
+					case 'PREPARE_ANIME_SERIES':
+						return { success: true, target: await background.AnimeLibrary.prepare(details) }
 					case 'CLEAR_LOGS':
 						return { success: true, ...await background.TaskStore.clearLogs() }
 					case 'RETRY_TASK':

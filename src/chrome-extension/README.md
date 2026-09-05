@@ -6,7 +6,8 @@
 
 ```text
 chrome-extension/
-├─ shared/                         配置迁移、DownloadIntent、消息、目录与文件规则
+├─ shared/                         配置迁移、DownloadIntent、番组身份、消息、目录与文件规则
+│  └─ anime-series.js              Mikan 番组 URL 身份与安全目录名
 ├─ content/
 │  ├─ bootstrap.js                轻量 Adapter 分发与节流后的动态页面刷新
 │  ├─ runtime-generic.js / runtime-sites.js  动态注册脚本的运行模式标记
@@ -18,12 +19,15 @@ chrome-extension/
 │  │  └─ mikan.js                 番组资源表
 │  └─ ui/
 │     ├─ download-confirmation.js 多行校验、规则与目录覆盖
+│     ├─ anime-routing.js          Mikan 番组目录绑定、复用与断点提示
 │     ├─ submission-queue.js      统一限流提交与失败隔离
 │     ├─ batch-progress.js        waiting/submitting/success/failed/duplicate
 │     └─ styles.js / feedback.js
 ├─ background/
 │  ├─ api/                        Cookie、HTTP、115 离线与文件 API
 │  ├─ tasks/                      持久任务记录与 alarm 监控
+│  │  ├─ folders.js                115 目录分页读取与路径校验
+│  │  └─ anime-library.js          番组 → 115 CID 持久绑定与重复提交回执
 │  ├─ processors/                 cleanup、generic、jav、anime
 │  ├─ content-scripts.js          按权限和站点 profile 动态注册
 │  ├─ router.js                   消息与 DownloadIntent 提交入口
@@ -40,20 +44,26 @@ chrome-extension/
 
 Adapter 只提供 `matches(location)`、`extractPageMetadata()`、`discoverDownloads()`、`enhancePage()` 与 `getDefaultProcessorProfile()`。`intent-factory.js` 统一生成包含 `sourceSite`、`mediaType`、`url`、`title`、`code`、`metadata`、`savePathCid`、`processorProfile` 的 DownloadIntent；Adapter 不调用 115 API。
 
-所有页面单发、Nyaa/Sukebei/Mikan 批量和 popup 手工输入都会进入同一个确认 UI。确认层会 trim、去空行、按 BTIH 或完整链接去重并标记非法行；用户可把网站默认规则改为 `generic`、`jav` 或 `anime`。提交层默认并发 2，逐项失败不会终止批次；一次确认窗口内的多条任务会携带同一个 `metadata.batchId`，供 anime 后处理识别批量扁平化范围。
+所有页面单发、Nyaa/Sukebei/Mikan 批量和 popup 手工输入都会进入同一个确认 UI。确认层会 trim、去空行、按 BTIH 或完整链接去重并标记非法行；用户可把网站默认规则改为 `generic`、`jav` 或 `anime`。提交层默认并发 2，逐项失败不会终止批次。
 
 - `generic`：通用安全清理，不按番号重命名。
 - `jav`：安全清理后，页面番号优先，最大主视频、字幕和任务文件夹按番号整理。
-- `anime`：单条任务通用安全清理并保留 torrent 原始文件名与目录结构；同一确认窗口的批量任务会在完成后将视频/字幕移到所选保存目录，确认源目录为空后再删除任务文件夹，不做番号或番名强制改名。
+- `anime`：单条任务通用安全清理并保留 torrent 原始文件名与目录结构；同一确认窗口的批量任务，或绑定到 Mikan 番组的单条/批量任务，会在完成后将视频/字幕移到同一个目标目录，确认源目录为空后再删除任务文件夹，不做番号或番名强制改名。移动计划会先保存文件 ID，失败或 service worker 重启后从计划继续，不会扩大扫描范围。
 
-## 页面结构校验记录（2026-09-02）
+### Mikan 番组归档
+
+Mikan 详情页的 `/Home/Bangumi/<数字 ID>` 是稳定的番组身份。第一次使用 Anime 规则时，确认窗口可选择：在当前目录建立或复用一层番组目录、直接绑定当前目录，或仅本次普通 Anime。绑定保存于 `chrome.storage.local` 的 `push115_anime_library`，与任务日志分开；因此“完结番”可一次选择多个资源整合，“连载番”先提交前 8 集，后续在同一详情页提交 EP09 时会自动复用相同 CID。已提交 BTIH 默认跳过，可取消跳过以强制重下。
+
+下载完成后，Anime 处理器只移动明确识别的 `视频/字幕`，保留 torrent 原始名称和未知文件；每次移动、目标目录可见性和空目录回收均会复核。同名文件、目录位置改变或 115 返回不一致时会保留源文件并等待重试，避免误删其他番组。清空后台日志不会清除番组绑定或重复提交回执。
+
+## 页面结构校验记录（2026-09-05）
 
 - Nyaa/Sukebei：两站由同一套 Nyaa 模板生成。当前官方模板确认列表为 `table.torrent-list > tbody > tr`；标题链接位于第二个 `td` 的 `/view/` 链接；Magnet 位于链接操作单元格，Adapter 先使用 `td:nth-child(3) a[href^="magnet:"]`，再以行内 Magnet 兜底。页面为服务端渲染，翻页会重新加载文档。
-- Mikan：当前番组详情页可见“番组名 / 大小 / 更新时间 / 下载 / 播放”资源表和逐行“复制磁连”。既有稳定实现继续读取 `.js-magnet` 及其 `href`、`data-clipboard-text`、`data-magnet`、`data-url`，并从最近的 `tr`/资源项取得标题；异步展开的新增行由节流 `MutationObserver` 补强。
+- Mikan：通过 Chrome 实际打开 `https://mikan.tangbai.cc/Home/Bangumi/2087` 核对到 `p.bangumi-title`（番组名）、`table.table.table-striped.tbl-border > tbody > tr`（资源行）、行内 `.js-episode-select[data-magnet]`（磁链）和 `.magnet-link-wrap`（资源名），复制磁链链接为 `.js-magnet`。页面服务端渲染，底部“显示更多”可能追加行；Adapter 继续从这些属性兜底读取，节流 `MutationObserver` 处理动态追加且不重复注入。
 - JavBus：保留现有 `#magnet-table`、`.magnet-name` 与 Magnet href 读取；番号先取 URL 最后一个路径段，再退回标题和信息区。
 - OpenBT：没有专用 Adapter 或 Site Profile；无论页面结构如何，都只由 Generic 查找标准 Magnet/ED2K href。
 
-本次尝试通过 Browser/Chrome 直接打开上述站点时，本机 Browser service 因插件运行目录权限无法启动；Nyaa/Sukebei 选择器额外以当前官方模板源码核对，Mikan 以当前番组详情页网络读取核对。JavBus/OpenBT 的实时 DOM 未据此臆造新 selector。待浏览器连接恢复后，应再做一次加载扩展后的交互冒烟验证。
+本轮已通过 Chrome 实际读取 Mikan 番组详情页的 DOM，并确认增强工具栏、15 个按 BTIH 去重的资源行与逐行按钮均可见；Nyaa/Sukebei、JavBus 的 selector 仍沿用上一轮已核对并记录的结构。OpenBT 不建立专用 Adapter，按 Generic 处理；若站点被 Cloudflare 拦截，不会臆造专用 selector。
 
 ## 权限与配置迁移
 
