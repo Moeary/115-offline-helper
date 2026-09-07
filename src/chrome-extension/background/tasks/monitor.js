@@ -4,12 +4,49 @@
 	const filesApi = global.Push115.Background.FilesApi
 	const offlineApi = global.Push115.Background.OfflineApi
 	const processors = global.Push115.Background.Processors
-	const { normalizeProcessorProfile } = global.Push115.Config
+	const { normalizeProcessorProfile, STORAGE_KEYS } = global.Push115.Config
 
 	const ALARM_NAME = 'push115-task-monitor'
 	const PERIOD_MINUTES = 0.5
 	const TASK_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+	// A monitor pass is deliberately bounded.  The cursor is persisted so a
+	// large Mikan batch advances fairly across alarm wakeups instead of walking
+	// all episodes in one service-worker turn.
+	const MAX_TASKS_PER_PASS = 2
+	const MONITOR_POLICY = Object.freeze({ concurrency: 1, maxTasksPerPass: MAX_TASKS_PER_PASS, minIntervalMs: 500 })
 	let running = false
+
+	function cursorKey() {
+		return STORAGE_KEYS?.TASK_MONITOR_CURSOR || 'push115_task_monitor_cursor'
+	}
+
+	async function readCursor() {
+		try {
+			const data = await chrome.storage.local.get(cursorKey())
+			return String(data?.[cursorKey()] || '').trim()
+		} catch (error) {
+			console.warn('[BG] 读取任务轮询游标失败:', error?.message || error)
+			return ''
+		}
+	}
+
+	async function writeCursor(taskId) {
+		try {
+			await chrome.storage.local.set({ [cursorKey()]: String(taskId || '') })
+		} catch (error) {
+			console.warn('[BG] 保存任务轮询游标失败:', error?.message || error)
+		}
+	}
+
+	function selectRoundRobin(active, cursor) {
+		if (active.length === 0) return { selected: [], start: 0 }
+		const found = active.findIndex(task => String(task.taskId || '') === cursor)
+		const start = found >= 0 ? found : 0
+		const selected = []
+		const count = Math.min(MAX_TASKS_PER_PASS, active.length)
+		for (let offset = 0; offset < count; offset += 1) selected.push(active[(start + offset) % active.length])
+		return { selected, start }
+	}
 
 	function getRemoteTaskId(task) {
 		return String(task?.info_hash || task?.infoHash || task?.hash || task?.task_id || task?.taskId || task?.id || '').trim()
@@ -210,7 +247,14 @@
 		running = true
 		try {
 			const tasks = await store.read()
-			for (const task of tasks.filter(store.taskIsActive)) {
+			const active = tasks.filter(store.taskIsActive)
+			if (active.length === 0) {
+				await writeCursor('')
+				return
+			}
+			const { selected, start } = selectRoundRobin(active, await readCursor())
+			for (let offset = 0; offset < selected.length; offset += 1) {
+				const task = selected[offset]
 				try {
 					await processTask(task)
 				} catch (error) {
@@ -221,6 +265,8 @@
 					if (task.attempts === 0 || task.attempts % 5 === 0) store.appendLog(task, task.message)
 				}
 				await store.persist(task)
+				const nextIndex = (start + offset + 1) % active.length
+				await writeCursor(active[nextIndex]?.taskId || '')
 			}
 		} finally {
 			running = false
@@ -233,8 +279,10 @@
 
 	global.Push115.Background.TaskMonitor = {
 		ALARM_NAME,
+		MONITOR_POLICY,
 		ensureAlarm,
 		processPending,
 		processTask,
+		selectRoundRobin,
 	}
 })(globalThis)

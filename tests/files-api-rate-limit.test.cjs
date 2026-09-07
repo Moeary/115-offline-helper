@@ -7,7 +7,7 @@ const vm = require('node:vm')
 const source = path.join(__dirname, '../src/chrome-extension/background/api/files.js')
 const offlineSource = path.join(__dirname, '../src/chrome-extension/background/api/offline.js')
 
-test('115 file mutations are serialized and spaced', { timeout: 5000 }, async () => {
+test('115 file mutations are serialized and spaced', { timeout: 10000 }, async () => {
 	const starts = []
 	let active = 0
 	let maximumActive = 0

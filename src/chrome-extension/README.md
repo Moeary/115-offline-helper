@@ -95,7 +95,7 @@ chrome-extension/
 }
 ```
 
-页面单发、列表批量、Mikan 番组提交和 popup 手工输入全部进入同一个确认窗口。窗口会 trim、去空行、按 BTIH 与完整链接去重，显示非法行，并允许用户覆盖站点默认 profile 与目录。Queue 默认并发 2（安全上限也是 2），每项独立显示 `waiting`、`submitting`、`success`、`failed` 或 `duplicate`；后台 115 文件变更再由 FilesApi 串行限速。
+页面单发、列表批量、Mikan 番组提交和 popup 手工输入全部进入同一个确认窗口。窗口会 trim、去空行、按 BTIH 与完整链接去重，显示非法行，并允许用户覆盖站点默认 profile 与目录。Queue 默认并发 2（安全上限也是 2），每项独立显示 `waiting`、`submitting`、`success`、`failed` 或 `duplicate`；后台 115 文件读写共用 500ms 串行节流（约 2 QPS 上限），任务监控每轮最多处理 2 项并按游标轮询。
 
 ## Processor 边界
 

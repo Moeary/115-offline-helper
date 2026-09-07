@@ -64,7 +64,7 @@ scripts/
 
 ### Confirmation 与 Queue
 
-所有来源共用一个确认窗口：多行 Magnet/ED2K 会 trim、去空行、按完整链接和 BTIH 去重，并标记非法行。确认窗口可以覆盖站点默认的 `generic`、`jav`、`anime` 规则和保存目录。任务池默认并发 2、安全上限也是 2，单项失败隔离，状态为 `waiting/submitting/success/failed/duplicate`；115 离线提交及文件移动、重命名、回收均由后台串行限速。
+所有来源共用一个确认窗口：多行 Magnet/ED2K 会 trim、去空行、按完整链接和 BTIH 去重，并标记非法行。确认窗口可以覆盖站点默认的 `generic`、`jav`、`anime` 规则和保存目录。任务池默认并发 2、安全上限也是 2，单项失败隔离，状态为 `waiting/submitting/success/failed/duplicate`；115 离线提交及文件读写共用 500ms 串行限速（约 2 QPS 上限），后台监控每轮最多轮询 2 个活动任务。
 
 ### Processor
 

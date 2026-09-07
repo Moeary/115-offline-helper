@@ -86,7 +86,10 @@
 		// Keep the storage shape stable for older Chrome/test shims that do not
 		// implement storage.local.remove.  This clears every local task record;
 		// the router clears the independent Anime library in the same operation.
-		await chrome.storage.local.set({ [STORAGE_KEYS.TASKS]: [] })
+		await chrome.storage.local.set({
+			[STORAGE_KEYS.TASKS]: [],
+			[STORAGE_KEYS.TASK_MONITOR_CURSOR]: '',
+		})
 		return { tasksCleared }
 	}
 

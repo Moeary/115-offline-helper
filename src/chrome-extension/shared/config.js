@@ -19,6 +19,7 @@
 		CLEAN_NFO: 'push115_clean_nfo',
 		SITE_PROFILES: 'push115_site_profiles',
 		TASKS: 'push115_tasks',
+		TASK_MONITOR_CURSOR: 'push115_task_monitor_cursor',
 		ANIME_LIBRARY: 'push115_anime_library',
 	})
 

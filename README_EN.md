@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.4.6-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.4.7-orange" alt="Version">
 </p>
 
 ---
@@ -60,7 +60,7 @@ Subtitle extensions are protected by default, image/NFO cleanup is opt-in, and e
 
 Mikan also handles a common 115 layout where the wrapper folder has exactly the same name as its video. Instead of relying on a rename that may be rejected, the processor creates a task-specific `__push115_stage_*` folder inside the destination, stages the explicit file IDs there, verifies and recycles the empty wrapper, then moves files back and recycles the staging folder. The plan persists the staging CID and file IDs so retries do not recreate it. A real same-name file already in the destination remains a collision and is never overwritten.
 
-Release-group prefixes such as `[NEST]` are preserved only when they belong to the torrent's original filename; the extension never invents or strips them. If an older run shortened a filename, retry restores the original name recorded in the plan. Version 1.4.6 also recovers the screenshot-era shape where a wrapper directory still has the full `.mkv` name but its only file was shortened to `[NEST]`, using only that explicit file ID and then removing the empty wrapper.
+Release-group prefixes such as `[NEST]` are preserved only when they belong to the torrent's original filename; the extension never invents or strips them. If an older run shortened a filename, retry restores the original name recorded in the plan. Version 1.4.7 also recovers the screenshot-era shape where a wrapper directory still has the full `.mkv` name but its only file was shortened to `[NEST]`, using only that explicit file ID and then removing the empty wrapper.
 
 ### Mikan series memory
 
@@ -107,7 +107,7 @@ Download the latest archive from [Releases](https://github.com/gangz1o/115-offli
 
 1. Scan the QR code with the 115 mobile client.
 2. Maintain the shared 115 directory catalog in Settings. Site profiles and the confirmation dialog select from this catalog; legacy `Name:CID` entries are migrated automatically.
-3. Enable and configure Generic, JavBus, Nyaa, Sukebei and Mikan separately. Set defaults, inline controls, batch controls and concurrency (default 2, safe maximum 2); 115 file mutations are additionally serialized and rate-limited in the background.
+3. Enable and configure Generic, JavBus, Nyaa, Sukebei and Mikan separately. Set defaults, inline controls, batch controls and concurrency (default 2, safe maximum 2); all 115 file reads and mutations share a 500ms serial limiter (about 2 QPS maximum), while the background monitor polls at most two tasks per alarm in round-robin order.
 4. Push from a page or paste multiple links in the popup. The dialog can override both the site profile and destination.
 5. Inspect, refresh or retry tasks from the background task page. **Clear logs** removes history only; it keeps active tasks, series bindings and deduplication receipts. If stale local state is blocking new submissions, use **Complete task reset**: it clears local tasks, processing plans, series bindings and dedupe receipts, while leaving 115 cloud tasks, login, directories and site settings untouched.
 
