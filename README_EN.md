@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.4.7-orange" alt="Version">
+<img src="https://img.shields.io/badge/version-1.6.0-orange" alt="Version">
 </p>
 
 ---
@@ -41,12 +41,15 @@ Adapters understand pages, the background worker owns API calls and persistent t
 |------|-------------|-----------------|--------------|
 | Generic | “Send to 115” beside Magnet/ED2K links | `generic` | Any authorized page; no media guessing |
 | JavBus | Page-number-aware Magnet buttons | `jav` | Code-first JAV organization |
+| South Plus | Thread ED2K discovery in a dedicated list, filename code extraction, per-item send and record actions | `jav` | Filename code first; record writes local history only |
 | Nyaa | Row buttons, checkboxes, select-all and batch submission | `anime` | Multi-select torrents with BTIH deduplication |
 | Sukebei | Same list core as Nyaa, separate site profile | `generic` | Safe default; change to `jav` only when appropriate |
 | Mikan | Per-resource, selected and all-resource actions | `anime` | Remember a destination for `/Home/Bangumi/<ID>` |
 | OpenBT | Generic fallback; no special adapter/profile | `generic` | No speculative DOM coupling |
 
-Nyaa, Sukebei and Mikan share one confirmation dialog and one rate-limited queue. A throttled `MutationObserver` handles appended rows without repeatedly injecting controls.
+Mikan currently supports `mikan.congvps.icu`, `mikanani.me`, `mikanime.tv` and the mirror `mikanani.kas.pub`; `mikanime.tv` currently redirects to `mikanani.me`, and the legacy `mikan.tangbai.cc` hostname remains compatible.
+
+Nyaa, Sukebei and Mikan share one confirmation dialog and one rate-limited queue; South Plus can additionally save discovered ED2K links and codes to local task history. A throttled `MutationObserver` handles appended rows without repeatedly injecting controls.
 
 ## Post-processing profiles
 
@@ -97,7 +100,7 @@ pixi install
 pixi run deploy
 ```
 
-Set the local Chrome path in `[browser] chrome`. Deploy validates the MV3 entry points, copies the extension to `dist/extension`, and opens the extensions page. If Chrome is already running, enable Developer mode and load `dist/extension` once, then use **Reload** after subsequent builds.
+Set the local Chrome path in `[browser] chrome`. Deploy validates the MV3 entry points, copies the extension to `dist/extension`, and opens the extensions page. If Chrome is already running, enable Developer mode and load `dist/extension` once, then use **Reload** after subsequent builds; authorized South Plus threads already open are repaired automatically, with a manual refresh as a fallback.
 
 ### Manual install
 
@@ -107,11 +110,11 @@ Download the latest archive from [Releases](https://github.com/gangz1o/115-offli
 
 1. Scan the QR code with the 115 mobile client.
 2. Maintain the shared 115 directory catalog in Settings. Site profiles and the confirmation dialog select from this catalog; legacy `Name:CID` entries are migrated automatically.
-3. Enable and configure Generic, JavBus, Nyaa, Sukebei and Mikan separately. Set defaults, inline controls, batch controls and concurrency (default 2, safe maximum 2); all 115 file reads and mutations share a 500ms serial limiter (about 2 QPS maximum), while the background monitor polls at most two tasks per alarm in round-robin order.
-4. Push from a page or paste multiple links in the popup. The dialog can override both the site profile and destination.
-5. Inspect, refresh or retry tasks from the background task page. **Clear logs** removes history only; it keeps active tasks, series bindings and deduplication receipts. If stale local state is blocking new submissions, use **Complete task reset**: it clears local tasks, processing plans, series bindings and dedupe receipts, while leaving 115 cloud tasks, login, directories and site settings untouched.
+3. Enable and configure Generic, JavBus, Nyaa, Sukebei, Mikan and South Plus separately. Set defaults, inline controls, batch controls and concurrency (default 2, safe maximum 2); all 115 file reads and mutations share a 500ms serial limiter (about 2 QPS maximum), while the background monitor polls at most two tasks per alarm in round-robin order.
+4. Push from a page or paste multiple links in the popup. The dialog can override both the site profile and destination. If South Plus has not been granted persistent page access yet, opening the popup temporarily enhances the current page; save the South Plus profile in Settings and approve its permission for automatic enhancement on new pages. After reloading the extension, already-open authorized South Plus threads are repaired automatically; refresh once if a page is still showing its old document.
+5. Inspect, refresh or retry tasks from the background task page. South Plus’s **Record** action stores the link, source, filename and code locally without creating a 115 cloud task. **Clear logs** removes history only; it keeps active tasks, series bindings and deduplication receipts. If stale local state is blocking new submissions, use **Complete task reset**: it clears local tasks, processing plans, series bindings and dedupe receipts, while leaving 115 cloud tasks, login, directories and site settings untouched.
 
-Generic uses optional `<all_urls>` permission. Dedicated site enhancements use their own host permissions. OpenBT has no separate profile and follows Generic when that permission is enabled.
+Generic uses optional `<all_urls>` permission. Dedicated site enhancements use optional host permissions, with a one-time `activeTab` fallback for the current HTTP(S) page when the popup is opened. OpenBT has no separate profile and follows Generic when that permission is enabled.
 
 ## Development
 

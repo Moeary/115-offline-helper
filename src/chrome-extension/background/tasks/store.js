@@ -165,6 +165,20 @@
 		return task
 	}
 
+	function sameIntent(task, intent) {
+		if (!task || !intent) return false
+		return global.Push115.DownloadIntent.dedupeKey(task.url || task.magnet) === global.Push115.DownloadIntent.dedupeKey(intent.url)
+	}
+
+	async function record(rawIntent) {
+		const intent = global.Push115.DownloadIntent.create(rawIntent)
+		const records = await read()
+		const existing = records.find(task => sameIntent(task, intent))
+		if (existing) return { task: existing, duplicate: true }
+		const task = await queue({ intent, monitor: false })
+		return { task, duplicate: false }
+	}
+
 	async function retry(taskId) {
 		const records = await read()
 		const task = records.find(item => item.taskId === taskId)
@@ -187,6 +201,7 @@
 		clearLogs,
 		resetRuntime,
 		queue,
+		record,
 		retry,
 		taskIsActive,
 		appendLog,

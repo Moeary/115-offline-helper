@@ -6,7 +6,7 @@
 			const url = new URL(pageUrl)
 			const id = url.pathname.match(/^\/Home\/Bangumi\/([1-9]\d*)\/?$/i)?.[1]
 			const name = String(title || '').trim()
-			if (url.hostname !== 'mikan.tangbai.cc' || !id || !name) return null
+			if (global.Push115?.Config?.isMikanHostname?.(url.hostname) !== true || !id || !name) return null
 			return { key: `mikan:${id}`, title: name, pageUrl: `${url.origin}/Home/Bangumi/${id}` }
 		} catch { return null }
 	}

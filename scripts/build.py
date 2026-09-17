@@ -29,6 +29,7 @@ REQUIRED_ARCHITECTURE_ENTRIES = (
     "content/sites/javbus.js",
     "content/sites/nyaa.js",
     "content/sites/mikan.js",
+    "content/sites/south-plus.js",
     "content/intent-factory.js",
     "content/ui/download-confirmation.js",
     "content/ui/anime-routing.js",

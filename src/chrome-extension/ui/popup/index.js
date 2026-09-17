@@ -472,6 +472,10 @@ async function init() {
 	// Bind events
 	bindEvents()
 	bindLoginModalEvents()
+	// Opening the popup grants activeTab for the current page. Use that
+	// temporary grant as a best-effort fallback when a dedicated site's
+	// optional origin has not been approved yet.
+	void sendMessage('INJECT_ACTIVE_TAB').catch(() => {})
 }
 
 function activateTab(tabName) {

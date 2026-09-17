@@ -3,7 +3,7 @@
 	const content = global.Push115.Content = global.Push115.Content || {}
 	const pathUtils = global.Push115.PathUtils
 	const intentApi = global.Push115.DownloadIntent
-	const SITE_LABELS = Object.freeze({ generic: 'Generic', javbus: 'JavBus', nyaa: 'Nyaa', sukebei: 'Sukebei', mikan: 'Mikan' })
+	const SITE_LABELS = Object.freeze({ generic: 'Generic', javbus: 'JavBus', nyaa: 'Nyaa', sukebei: 'Sukebei', mikan: 'Mikan', southplus: 'South Plus' })
 	const PROFILE_LABELS = Object.freeze({ generic: 'Generic', jav: 'JAV', anime: 'Anime' })
 
 	function normalizeInput(input) {

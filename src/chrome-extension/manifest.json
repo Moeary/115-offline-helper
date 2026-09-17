@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "115 Offline Helper",
-  "version": "1.4.7",
+  "version": "1.6.0",
   "description": "Site-adapted magnet/ed2k submission and safe background processing for 115.com.",
   "permissions": [
     "storage",
@@ -20,7 +20,13 @@
     "*://*.javbus.com/*",
     "*://nyaa.si/*",
     "*://sukebei.nyaa.si/*",
-    "*://mikan.tangbai.cc/*"
+    "*://mikan.congvps.icu/*",
+    "*://mikanani.me/*",
+    "*://mikanime.tv/*",
+    "*://mikanani.kas.pub/*",
+    "*://mikan.tangbai.cc/*",
+    "*://south-plus.net/*",
+    "*://www.south-plus.net/*"
   ],
   "action": {
     "default_title": "115 Offline Helper",

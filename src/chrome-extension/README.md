@@ -40,7 +40,8 @@ chrome-extension/
 │  │  ├─ generic.js                 Magnet/ED2K 通用增强
 │  │  ├─ javbus.js                  番号、磁链和内联按钮
 │  │  ├─ nyaa.js                    Nyaa/Sukebei family core
-│  │  └─ mikan.js                   番组资源表和批量操作
+│  │  ├─ mikan.js                   番组资源表和批量操作
+│  │  └─ south-plus.js              线程 ED2K、番号与本地记录
 │  └─ ui/
 │     ├─ download-confirmation.js   多行校验、去重、规则/目录覆盖
 │     ├─ anime-routing.js            番组目录建立、绑定和复用
@@ -77,6 +78,9 @@ chrome-extension/
 | JavBus | `#magnet-table`、`.magnet-name`、页面 URL 末段番号 | `jav` | URL 番号优先，按钮可重复刷新而不重复注入 |
 | Nyaa family | `table.torrent-list > tbody > tr`、行标题和 Magnet 操作区 | Nyaa=`anime`，Sukebei=`generic` | 共用 DOM 核心，站点匹配与配置独立 |
 | Mikan | `p.bangumi-title`、`table.table.table-striped.tbl-border`、`.js-episode-select[data-magnet]` | `anime` | 详情页 ID 用于番组记忆 |
+| South Plus | `south-plus.net/read.php` 线程页、ED2K href 或正文文本 | `jav` | 每项独立选择与“发送到115”；支持批量发送和本地记录 |
+
+Mikan 当前支持 `mikan.congvps.icu`、`mikanani.me`、`mikanime.tv` 和镜像 `mikanani.kas.pub`；`mikanime.tv` 当前跳转至 `mikanani.me`，并保留 `mikan.tangbai.cc` 旧域名兼容。五个域名共用同一套详情页身份和资源表适配规则。
 
 页面增强只追加自己的 `data-push115-*` 标记，并通过节流后的 MutationObserver 处理动态行。翻页或 SPA 更新时先判断已有标记，避免按钮和选择框重复出现。
 
@@ -86,7 +90,7 @@ chrome-extension/
 
 ```js
 {
-  sourceSite,       // generic / javbus / nyaa / sukebei / mikan
+  sourceSite,       // generic / javbus / nyaa / sukebei / mikan / southplus
   mediaType,        // generic / jav / anime
   url, title, code,
   metadata,          // 页面、番组、批次等可追踪信息
@@ -113,16 +117,17 @@ chrome-extension/
 
 Mikan 绑定使用 `push115_anime_library`：`mikan:<BangumiID>` 对应目标 CID 与模式。完结番可以一次整合，连载番先提交前 8 集、之后补集仍会复用同一目录；清空日志只清历史记录，不清绑定和 BTIH 去重回执。设置页的“完全重置任务”是单独的本地运行时清理：会清空任务、处理计划、番组绑定和去重回执，并使重置前的监控/提交对象无法重新写回；不会调用 115 删除接口。
 
-## 页面结构核对记录（2026-09-05）
+## 页面结构核对记录（2026-09-05；South Plus 2026-09-14）
 
-- **Mikan**：Chrome 实际打开 `https://mikan.tangbai.cc/Home/Bangumi/2087`。番组名为 `p.bangumi-title`，资源表为 `table.table.table-striped.tbl-border`；每行的原生勾选框为 `.js-episode-select[data-magnet]`，资源名在 `.magnet-link-wrap`，复制磁链使用 `.js-magnet`。页面服务端渲染，“显示更多”追加行时由观察器节流刷新。
+- **Mikan**：已核对当前主站 `https://mikanani.me/Home/Bangumi/2087`。同一详情页契约支持 `mikan.congvps.icu`、`mikanani.me`、`mikanime.tv`、`mikanani.kas.pub`，并兼容旧域名 `mikan.tangbai.cc`；番组名为 `p.bangumi-title`，资源表为 `table.table.table-striped.tbl-border`，每行的原生勾选框为 `.js-episode-select[data-magnet]`，资源名在 `.magnet-link-wrap`，复制磁链使用 `.js-magnet`。页面服务端渲染，“显示更多”追加行时由观察器节流刷新。
 - **Nyaa/Sukebei**：两站采用同一列表模板，Adapter 以 `table.torrent-list > tbody > tr` 为行边界，第二个单元格的 `/view/` 链接为标题，Magnet 优先读取操作单元格的 `a[href^="magnet:"]` 并保留行内兜底。翻页通常重新加载文档。
 - **JavBus**：保留现有 `#magnet-table`、`.magnet-name` 和 Magnet href；番号先取 URL 最后一个路径段，再退回标题/信息区。
+- **South Plus**：线程页以 ED2K href 或正文中的 `ed2k://|file|...|` 文本为资源边界；适配器把两种形态统一收进页面顶部的集中资源列表，每行提供独立复选框、“发送到115”和“记录”按钮，从 ED2K 文件名、链接文本和主题标题提取页面/单项番号，并提供批量发送及仅写本地任务历史的“记录”操作。实页控制台已确认该站点常使用正文文本而非 `a[href^="ed2k:"]`，因此适配器同时覆盖两种形态。
 - **OpenBT**：无专用 Adapter 和 Site Profile；只按 Generic 查找标准 Magnet/ED2K，不针对被 Cloudflare 拦截的页面臆造 selector。
 
 ## 配置、权限与兼容
 
-`push115_site_profiles` 为 Generic、JavBus、Nyaa、Sukebei、Mikan 保存 `enabled`、默认目录、默认 profile 和页面控件；目录从设置页共享的离线目录清单选择。旧版 `savePathCid`、`processorProfile`、`enhancementMode` 以及 Mikan `none` 会在读取时迁移。动态注册将 Generic 与专用站点分成两种 runtime，保留 optional `<all_urls>` 与已有 host permission 逻辑。
+`push115_site_profiles` 为 Generic、JavBus、Nyaa、Sukebei、Mikan、South Plus 保存 `enabled`、默认目录、默认 profile 和页面控件；目录从设置页共享的离线目录清单选择。旧版 `savePathCid`、`processorProfile`、`enhancementMode` 以及 Mikan `none` 会在读取时迁移。动态注册将 Generic 与专用站点分成两种 runtime，保留 optional `<all_urls>` 与已有 host permission 逻辑；扩展启动或重载时会检查已打开标签页并按运行时标记补注入，避免重复执行；popup 打开时可使用 `activeTab` 对当前 HTTP(S) 页面做一次性兜底注入。South Plus 的记录动作复用本地任务历史并按完整 ED2K 链接去重，不调用 115 API。
 
 稳定的登录、Cookie、115 离线 API、持久任务、日志清理判断均保持原实现；新增逻辑通过消息和 profile 接入。
 

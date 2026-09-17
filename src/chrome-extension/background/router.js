@@ -57,6 +57,27 @@
 		return { result, task }
 	}
 
+	async function recordIntents(rawIntents = []) {
+		const list = Array.isArray(rawIntents) ? rawIntents : []
+		const entries = []
+		const seen = new Set()
+		for (const rawIntent of list) {
+			const intent = global.Push115.DownloadIntent.create(rawIntent)
+			const key = global.Push115.DownloadIntent.dedupeKey(intent.url)
+			if (seen.has(key)) {
+				entries.push({ key, duplicate: true, intent })
+				continue
+			}
+			seen.add(key)
+			entries.push({ key, intent, ...(await background.TaskStore.record(intent)) })
+		}
+		return {
+			recorded: entries.filter(entry => !entry.duplicate).length,
+			duplicate: entries.filter(entry => entry.duplicate).length,
+			entries,
+		}
+	}
+
 	function notify(details = {}) {
 		if (!chrome.notifications?.create) return
 		chrome.notifications.create({
@@ -86,6 +107,8 @@
 						return { success: true, cookie: await background.Auth.persistCookieToStorageAndJar(details.cookie) }
 					case 'SUBMIT_INTENT':
 						return { success: true, ...await submitIntent(details.intent || details) }
+					case 'RECORD_INTENTS':
+						return { success: true, ...await recordIntents(details.intents) }
 					case 'QUEUE_TASK':
 						return { success: true, task: await background.TaskStore.queue(details) }
 					case 'GET_TASKS':
@@ -118,6 +141,8 @@
 					case 'UNREGISTER_CONTENT_SCRIPTS':
 						await background.ContentScripts.unregister()
 						return { success: true }
+					case 'INJECT_ACTIVE_TAB':
+						return { success: true, ...await background.ContentScripts.injectActiveTab() }
 					default:
 						return null
 				}
@@ -133,5 +158,5 @@
 		})
 	}
 
-	background.Router = { listen, submitIntent }
+	background.Router = { listen, submitIntent, recordIntents }
 })(globalThis)

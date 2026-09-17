@@ -314,6 +314,12 @@ async function requestContentScriptPermissions(siteProfiles) {
 		if (!siteProfiles[siteId]?.enabled) continue
 		const origins = [...definition.matches]
 		let granted = await chrome.permissions.contains({ origins })
+		// Chrome may report the broader optional <all_urls> grant rather than
+		// each dedicated host pattern in this check. Treat it as covering the
+		// site before prompting again during a settings save.
+		if (!granted && !origins.includes('<all_urls>')) {
+			granted = await chrome.permissions.contains({ origins: ['<all_urls>'] })
+		}
 		if (!granted) granted = await chrome.permissions.request({ origins })
 		if (!granted) throw new Error(`${definition.label}: ${t('permission_denied')}`)
 	}

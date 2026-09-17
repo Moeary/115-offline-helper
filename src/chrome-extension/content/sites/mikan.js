@@ -4,7 +4,7 @@
 	const SITE_ID = 'mikan'
 
 	function matches(currentLocation = location) {
-		return currentLocation.hostname === 'mikan.tangbai.cc'
+		return global.Push115.Config.isMikanHostname(currentLocation.hostname)
 	}
 
 	function extractPageMetadata() {

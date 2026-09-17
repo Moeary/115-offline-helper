@@ -23,6 +23,26 @@
 		ANIME_LIBRARY: 'push115_anime_library',
 	})
 
+	const MIKAN_HOSTNAMES = Object.freeze([
+		'mikan.congvps.icu',
+		'mikanani.me',
+		'mikanime.tv',
+		'mikanani.kas.pub',
+		'mikan.tangbai.cc',
+	])
+	const MIKAN_MATCHES = Object.freeze(MIKAN_HOSTNAMES.map(hostname => `*://${hostname}/*`))
+	function isMikanHostname(hostname) {
+		return MIKAN_HOSTNAMES.includes(String(hostname || '').toLowerCase())
+	}
+	const SOUTHPLUS_HOSTNAMES = Object.freeze([
+		'south-plus.net',
+		'www.south-plus.net',
+	])
+	const SOUTHPLUS_MATCHES = Object.freeze(SOUTHPLUS_HOSTNAMES.map(hostname => `*://${hostname}/*`))
+	function isSouthPlusHostname(hostname) {
+		return SOUTHPLUS_HOSTNAMES.includes(String(hostname || '').toLowerCase())
+	}
+
 	const SITE_DEFINITIONS = Object.freeze({
 		generic: Object.freeze({
 			label: 'Generic',
@@ -46,8 +66,13 @@
 		}),
 		mikan: Object.freeze({
 			label: 'Mikan',
-			matches: Object.freeze(['*://mikan.tangbai.cc/*']),
+			matches: MIKAN_MATCHES,
 			mediaType: 'anime',
+		}),
+		southplus: Object.freeze({
+			label: 'South Plus',
+			matches: SOUTHPLUS_MATCHES,
+			mediaType: 'jav',
 		}),
 	})
 
@@ -75,6 +100,15 @@
 			defaultSavePathCid: '0',
 			defaultProcessorProfile: 'anime',
 			inlineSendButton: true,
+			batchSelection: true,
+			batchConcurrency: 2,
+		}),
+		southplus: Object.freeze({
+			enabled: true,
+			defaultSavePathCid: '0',
+			defaultProcessorProfile: 'jav',
+			inlineSendButton: true,
+			recordButton: true,
 			batchSelection: true,
 			batchConcurrency: 2,
 		}),
@@ -144,7 +178,10 @@
 			profile.inlineSendButton = saved.inlineSendButton !== undefined
 				? saved.inlineSendButton === true
 				: saved.enhancementMode !== 'modal'
-			if (['nyaa', 'sukebei', 'mikan'].includes(siteId)) {
+			if (siteId === 'southplus') profile.recordButton = saved.recordButton !== undefined
+				? saved.recordButton === true
+				: true
+			if (['nyaa', 'sukebei', 'mikan', 'southplus'].includes(siteId)) {
 				profile.batchSelection = saved.batchSelection !== undefined ? saved.batchSelection === true : true
 				const concurrency = Number(profile.batchConcurrency)
 				profile.batchConcurrency = Number.isFinite(concurrency) ? Math.min(BATCH_CONCURRENCY_MAX, Math.max(1, Math.round(concurrency))) : 2
@@ -203,6 +240,12 @@
 	global.Push115 = global.Push115 || {}
 	global.Push115.Config = {
 		STORAGE_KEYS,
+		MIKAN_HOSTNAMES,
+		MIKAN_MATCHES,
+		isMikanHostname,
+		SOUTHPLUS_HOSTNAMES,
+		SOUTHPLUS_MATCHES,
+		isSouthPlusHostname,
 		SITE_DEFINITIONS,
 		DEFAULT_SITE_PROFILES,
 		PROCESSOR_PROFILES,

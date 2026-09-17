@@ -24,7 +24,7 @@ const configKeys = globalThis.Push115.Config.STORAGE_KEYS
 
 async function initialize() {
 	await globalThis.Push115.Config.migrateConfig()
-	await background.ContentScripts.sync()
+	await background.ContentScripts.syncAndInject()
 	await background.TaskMonitor.ensureAlarm()
 	void background.TaskMonitor.processPending()
 }

@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.4.7-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.6.0-orange" alt="Version">
 </p>
 
 ---
@@ -43,12 +43,15 @@ DownloadIntent（来源、标题、番号、目录、规则）
 |------|----------|----------|----------------|
 | Generic | 在磁链或 ED2K 附近增加“发送到115” | `generic` | 任意网页、论坛、博客；不猜测媒体类型 |
 | JavBus | 读取页面番号和磁链，增加内联按钮 | `jav` | 页面番号优先，下载后按番号整理 |
+| South Plus | 线程页集中列出 ED2K、提取文件名番号并提供逐项发送/记录 | `jav` | 文件名番号优先；记录只写本地任务历史，不提交 115 |
 | Nyaa | 列表行按钮、行选择框、全选和批量提交 | `anime` | 一次选多条资源，BTIH 去重，失败逐项显示 |
 | Sukebei | 复用 Nyaa 的列表核心，但独立站点配置 | `generic` | 默认不把内容当作 JAV，确认时可改为 `jav` |
 | Mikan | 番组资源表的单条、选中、全部推送 | `anime` | 以 `/Home/Bangumi/<ID>` 记住番组目标目录 |
 | OpenBT | 不建立专用 Adapter，按 Generic 识别标准 Magnet/ED2K | `generic` | 不依赖猜测性的 DOM selector |
 
-列表网站的按钮只提交意图，不直接碰 115 API；Nyaa、Sukebei 和 Mikan 共用同一套确认窗口与任务池。动态追加的资源由节流后的 `MutationObserver` 刷新，避免重复注入和全页面高频扫描。
+Mikan 当前支持 `mikan.congvps.icu`、`mikanani.me`、`mikanime.tv` 和镜像 `mikanani.kas.pub`；`mikanime.tv` 当前跳转至 `mikanani.me`，并保留 `mikan.tangbai.cc` 旧域名兼容。
+
+列表网站的按钮只提交意图，不直接碰 115 API；Nyaa、Sukebei 和 Mikan 共用同一套确认窗口与任务池，South Plus 还可把识别到的 ED2K 和番号写入本地任务历史。动态追加的资源由节流后的 `MutationObserver` 刷新，避免重复注入和全页面高频扫描。
 
 ## 后处理规则有明确边界
 
@@ -110,7 +113,7 @@ pixi run deploy
 
 `pixi run deploy` 会校验 Manifest V3、入口文件和本地资源，将源码复制到 `dist/extension`，随后打开扩展管理页。若 Chrome 已经运行而忽略启动参数，首次安装时在扩展页开启“开发者模式”，点击“加载已解压的扩展”，选择 `dist/extension`。
 
-以后修改源码后再次执行 `pixi run deploy`，再点击扩展卡片上的“重新加载”。
+以后修改源码后再次执行 `pixi run deploy`，再点击扩展卡片上的“重新加载”；已打开且已获授权的 South Plus 线程会自动补注入，仍显示旧页面时再手动刷新。
 
 ### 手动安装
 
@@ -127,13 +130,13 @@ pixi run deploy
 
 1. 点击扩展图标，使用 115 手机客户端扫码登录。
 2. 在设置页维护“115 离线目录”清单。站点档案和确认窗口从这份清单选择目录；旧版的 `目录名:CID` 配置会自动迁移，不需要为每个站点重复填写 CID。
-3. 在“站点增强”中分别启用 Generic、JavBus、Nyaa、Sukebei、Mikan，设置各自默认目录、默认规则、内联按钮和列表并发数。默认并发为 2，安全上限也是 2；115 文件读写共用 500ms 串行节流（不超过约 2 QPS），后台任务监控每轮最多轮询 2 项并按游标轮转。
-4. 回到网页点击按钮或打开弹窗手工粘贴链接。确认窗口里的规则和目录可以覆盖网站默认值。
-5. 在主页的后台任务页查看处理日志、刷新状态或重试失败项；设置页提供“清空日志”，只清除历史记录，不取消进行中的任务，也不清除番组绑定和去重回执。若本地任务状态因目录失效而卡住，可使用“完全重置任务”：它会清除扩展本地任务、处理计划、番组绑定和去重回执，但不会取消 115 云端任务，也不会修改登录、目录或站点设置。
+3. 在“站点增强”中分别启用 Generic、JavBus、Nyaa、Sukebei、Mikan、South Plus，设置各自默认目录、默认规则、内联按钮和列表并发数。默认并发为 2，安全上限也是 2；115 文件读写共用 500ms 串行节流（不超过约 2 QPS），后台任务监控每轮最多轮询 2 项并按游标轮转。
+4. 回到网页点击按钮或打开弹窗手工粘贴链接。确认窗口里的规则和目录可以覆盖网站默认值。若 South Plus 尚未授予持久网页权限，打开扩展弹窗会临时增强当前网页；要让新页面自动出现按钮，请在设置页保存并允许 South Plus 权限。重新加载扩展后，已打开且已获授权的 South Plus 线程也会自动补注入；若页面仍停留在旧文档，可手动刷新一次。
+5. 在主页的后台任务页查看处理日志、刷新状态或重试失败项；South Plus 的“记录”按钮只保存本地链接、来源、文件名和番号，不会创建 115 云端任务。设置页提供“清空日志”，只清除历史记录，不取消进行中的任务，也不清除番组绑定和去重回执。若本地任务状态因目录失效而卡住，可使用“完全重置任务”：它会清除扩展本地任务、处理计划、番组绑定和去重回执，但不会取消 115 云端任务，也不会修改登录、目录或站点设置。
 
 ### 权限说明
 
-预定义站点使用对应的 host permission；Generic 的全网页识别为可选的 `<all_urls>` 权限。权限关闭时，扩展仍可使用已授权的站点增强和手工输入。OpenBT 没有独立权限和 profile，启用 Generic 后按普通网页处理。
+预定义站点使用对应的可选 host permission；Generic 的全网页识别为可选的 `<all_urls>` 权限。打开扩展弹窗时，`activeTab` 只对当前 HTTP(S) 页面提供一次性增强作为兜底。权限关闭时，扩展仍可使用已授权的站点增强和手工输入。OpenBT 没有独立权限和 profile，启用 Generic 后按普通网页处理。
 
 ## 常见问题
 

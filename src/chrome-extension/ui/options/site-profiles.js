@@ -2,7 +2,7 @@
 	'use strict'
 	const definitions = global.Push115.Config.SITE_DEFINITIONS
 	const processorOptions = [['generic', 'Generic（安全清理，不重命名）'], ['jav', 'JAV（按番号整理）'], ['anime', 'Anime（保留原名）']]
-	const listSites = new Set(['nyaa', 'sukebei', 'mikan'])
+	const listSites = new Set(['nyaa', 'sukebei', 'mikan', 'southplus'])
 
 	function pathOptions(rawPathList, selectedCid, rootLabel = '根目录') {
 		const pathUtils = global.Push115.PathUtils
@@ -78,7 +78,10 @@
 				heading,
 				field('默认 115 保存目录', cid),
 				field('默认处理规则', select('defaultProcessorProfile', processorOptions, profile.defaultProcessorProfile)),
-				checkboxField('显示行内“发送到115”', 'inlineSendButton', profile.inlineSendButton !== false),
+				checkboxField(siteId === 'southplus' ? '显示资源列表中的“发送到115”按钮' : '显示行内“发送到115”', 'inlineSendButton', profile.inlineSendButton !== false),
+			)
+			if (siteId === 'southplus') card.append(
+				checkboxField('显示资源列表中的“记录”按钮', 'recordButton', profile.recordButton !== false),
 			)
 			if (listSites.has(siteId)) {
 				const concurrency = document.createElement('input')
@@ -107,6 +110,7 @@
 				defaultProcessorProfile: get('defaultProcessorProfile').value,
 				inlineSendButton: get('inlineSendButton').checked,
 			}
+			if (siteId === 'southplus') profiles[siteId].recordButton = get('recordButton').checked
 			if (listSites.has(siteId)) {
 				profiles[siteId].batchSelection = get('batchSelection').checked
 				profiles[siteId].batchConcurrency = Number(get('batchConcurrency').value)
