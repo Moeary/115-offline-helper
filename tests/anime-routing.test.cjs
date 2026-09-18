@@ -401,6 +401,52 @@ test('complete runtime reset clears local tasks and Mikan bindings; stale monito
 	assert.deepEqual(e.data.push115_tasks, [])
 })
 
+test('local cancellation is terminal and a stale monitor object cannot resurrect it', async () => {
+	const e = environment()
+	const task = {
+		taskId: 'cancel-stale', status: 'waiting', monitorDownload: true, metadata: { monitorDownload: true },
+		beforeSnapshot: { cid: '10', items: [] }, directPlan: { fid: 'f-1' }, animeTransfer: { sourceCid: '100' },
+		remoteFolderCid: '100', directFileId: 'f-1', directFileCid: '100', percent: 30,
+		createdAt: Date.now(), updatedAt: Date.now(),
+	}
+	await e.bg.TaskStore.persist(task)
+	const stale = structuredClone(task)
+	const cancelled = await e.bg.TaskStore.cancel(task.taskId, { source: 'bridge' })
+	assert.equal(cancelled.status, 'cancelled')
+	assert.equal(cancelled.monitorDownload, false)
+	assert.equal(cancelled.metadata.monitorDownload, false)
+	assert.equal(cancelled.beforeSnapshot, undefined)
+	assert.equal(cancelled.directPlan, undefined)
+	assert.equal(cancelled.animeTransfer, undefined)
+	assert.equal(cancelled.remoteFolderCid, undefined)
+	assert.equal(cancelled.directFileId, undefined)
+	assert.equal(cancelled.directFileCid, undefined)
+	assert.equal(cancelled.percent, undefined)
+	stale.status = 'processing'
+	stale.percent = 90
+	await e.bg.TaskStore.persist(stale)
+	const saved = (await e.bg.TaskStore.read()).find(item => item.taskId === task.taskId)
+	assert.equal(saved.status, 'cancelled')
+	assert.equal(saved.percent, undefined)
+})
+
+test('monitor checkpoint stops processor work when cancellation arrives mid-pass', async () => {
+	const e = environment()
+	const task = {
+		taskId: 'checkpoint-cancel', status: 'waiting', processorProfile: 'anime', mediaType: 'anime',
+		metadata: { animeTarget: { cid: '10' } }, animeTransfer: { sourceCid: '100' },
+		createdAt: Date.now(), updatedAt: Date.now(),
+	}
+	await e.bg.TaskStore.persist(task)
+	e.bg.Processors.anime.process = async ({ checkpoint }) => {
+		await e.bg.TaskStore.cancel(task.taskId, { source: 'bridge' })
+		await checkpoint()
+	}
+	await assert.rejects(e.bg.TaskMonitor.processTask(task), error => error?.code === 'TASK_CANCELLED')
+	const saved = (await e.bg.TaskStore.read()).find(item => item.taskId === task.taskId)
+	assert.equal(saved.status, 'cancelled')
+})
+
 test('concurrent persistence retains all active tasks, including more than the old 50-task limit', async () => {
 	const e = environment()
 	await Promise.all(Array.from({ length: 65 }, (_, i) => e.bg.TaskStore.persist({ taskId: String(i), status: 'waiting' })))

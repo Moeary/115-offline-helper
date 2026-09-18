@@ -445,6 +445,10 @@ h3 {
 	color: #248a3d;
 }
 
+.push115-task-card.cancelled .push115-task-card-status {
+	color: #8a6d1d;
+}
+
 .push115-task-card-meta {
 	margin-top: 5px;
 	color: #73767d;

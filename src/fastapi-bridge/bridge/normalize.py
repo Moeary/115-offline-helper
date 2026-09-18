@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 
 INVALID_CODE_PREFIXES = frozenset(
@@ -41,6 +41,10 @@ _GENERAL_CODE_PATTERN = re.compile(
 _EXACT_CODE_INPUT = re.compile(r"^[A-Z0-9]+(?:[-_.\s][A-Z0-9]+)*$", re.IGNORECASE)
 _NORMALIZED_CODE = re.compile(
     r"^(?:FC2-(?:PPV-)?\d{5,7}|[A-Z]{2,6}-\d{2,5}(?:-[A-Z])?)$"
+)
+_ED2K_PATTERN = re.compile(
+    r"^ed2k://\|file\|([^|]*)\|([0-9]+)\|([0-9a-f]{32})\|/\s*$",
+    re.IGNORECASE,
 )
 
 
@@ -85,7 +89,12 @@ def extract_btih(url: object) -> str:
     if parsed.scheme.lower() != "magnet":
         return ""
     for value in parse_qs(parsed.query, keep_blank_values=True).get("xt", []):
-        match = re.fullmatch(r"urn:btih:([a-z0-9]{32}|[a-f0-9]{40})", value, re.IGNORECASE)
+        # Keep the wire contract ASCII-only.  Python's Unicode-aware
+        # IGNORECASE can make ranges such as ``[a-z]`` match non-ASCII
+        # lookalikes, which are not valid BTIH text.
+        match = re.fullmatch(
+            r"urn:btih:([A-Za-z2-7]{32}|[A-Fa-f0-9]{40})", value
+        )
         if match:
             return match.group(1).lower()
     return ""
@@ -94,6 +103,50 @@ def extract_btih(url: object) -> str:
 def is_magnet(url: object) -> bool:
     value = str(url or "").strip()
     return value.lower().startswith("magnet:?") and bool(extract_btih(value))
+
+
+def parse_ed2k(url: object) -> dict[str, object] | None:
+    """Parse one strict ED2K file link and return canonical file metadata."""
+
+    value = str(url or "").strip()
+    match = _ED2K_PATTERN.fullmatch(value)
+    if not match:
+        return None
+    try:
+        encoded_name = match.group(1)
+        if re.search(r"%(?![0-9a-fA-F]{2})", encoded_name):
+            return None
+        try:
+            file_name = unquote(encoded_name, errors="strict").strip()
+        except UnicodeDecodeError:
+            return None
+        size = int(match.group(2), 10)
+    except (TypeError, ValueError):
+        return None
+    if not file_name or "|" in file_name or any(
+        ord(char) < 0x20 or ord(char) == 0x7F for char in file_name
+    ):
+        return None
+    if size < 0 or size > 2**63 - 1:
+        return None
+    return {
+        "linkType": "ed2k",
+        "fileName": file_name,
+        "size": size,
+        "hash": match.group(3).lower(),
+    }
+
+
+def is_ed2k(url: object) -> bool:
+    return parse_ed2k(url) is not None
+
+
+def link_type(url: object) -> str:
+    if is_magnet(url):
+        return "magnet"
+    if is_ed2k(url):
+        return "ed2k"
+    return ""
 
 
 def dedupe_key(url: object) -> str:

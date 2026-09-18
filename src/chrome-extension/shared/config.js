@@ -23,9 +23,12 @@
 		ANIME_LIBRARY: 'push115_anime_library',
 		BRIDGE_ENABLED: 'push115_bridge_enabled',
 		BRIDGE_TOKEN: 'push115_bridge_token',
+		// Keep the historical key for migration; it stores the Bridge default CID.
 		BRIDGE_TARGET_CID: 'push115_bridge_target_cid',
 		BRIDGE_JOBS: 'push115_bridge_jobs',
 		BRIDGE_OUTBOX: 'push115_bridge_outbox',
+		BRIDGE_ACTIONS: 'push115_bridge_actions',
+		BRIDGE_ACTION_OUTBOX: 'push115_bridge_action_outbox',
 	})
 
 	// The bridge deliberately has one fixed loopback endpoint.  Keeping this
@@ -222,6 +225,8 @@
 		STORAGE_KEYS.BRIDGE_TARGET_CID,
 		STORAGE_KEYS.BRIDGE_JOBS,
 		STORAGE_KEYS.BRIDGE_OUTBOX,
+		STORAGE_KEYS.BRIDGE_ACTIONS,
+		STORAGE_KEYS.BRIDGE_ACTION_OUTBOX,
 	].includes(key)))
 
 	async function loadConfig() {
@@ -236,6 +241,8 @@
 			STORAGE_KEYS.BRIDGE_TARGET_CID,
 			STORAGE_KEYS.BRIDGE_JOBS,
 			STORAGE_KEYS.BRIDGE_OUTBOX,
+			STORAGE_KEYS.BRIDGE_ACTIONS,
+			STORAGE_KEYS.BRIDGE_ACTION_OUTBOX,
 		]) delete config[key]
 		config[STORAGE_KEYS.SITE_PROFILES] = normalizeSiteProfiles(stored[STORAGE_KEYS.SITE_PROFILES], config)
 		return config

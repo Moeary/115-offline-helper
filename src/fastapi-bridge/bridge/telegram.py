@@ -9,16 +9,25 @@ and no credentials are written to the queue.
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import secrets
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 
 from .db import JobRecord, QueueStore
-from .normalize import is_magnet, normalize_exact_code, valid_public_https_url
+from .normalize import (
+    dedupe_key,
+    is_ed2k,
+    is_magnet,
+    normalize_exact_code,
+    parse_ed2k,
+    valid_public_https_url,
+)
 from .providers.base import AvMetadata, MagnetCandidate, ProviderError
 from .schemas import IntentModel, model_dump
 
@@ -31,9 +40,17 @@ _AV_COMMAND = re.compile(
 _ANIME_COMMAND = re.compile(
     r"^/anime(?:@[A-Za-z0-9_]{1,64})?\s+(.+?)\s*$", re.IGNORECASE
 )
+_ADD_COMMAND = re.compile(
+    r"^/add(?:@[A-Za-z0-9_]{1,64})?\s+(.+?)\s*$", re.IGNORECASE
+)
+_DIR_COMMAND = re.compile(r"^/(?:dir|path)(?:@[A-Za-z0-9_]{1,64})?\s*$", re.IGNORECASE)
+_JOBS_COMMAND = re.compile(r"^/jobs(?:@[A-Za-z0-9_]{1,64})?\s*$", re.IGNORECASE)
 _MAX_CANDIDATES = 24
 _MAX_CAPTION = 1024
 _MAX_BUTTON_TEXT = 56
+_MAX_JOBS = 10
+_CALLBACK_KINDS = frozenset({"candidate", "dir", "job_detail", "retry", "cancel"})
+_TELEGRAM_SAVE_PATH_CID = re.compile(r"(?:0|[1-9][0-9]{0,63})\Z")
 
 
 class TelegramError(RuntimeError):
@@ -260,6 +277,12 @@ def _clip(value: object, limit: int) -> str:
     return text if len(text) <= limit else f"{text[: max(0, limit - 1)]}…"
 
 
+def _save_path_field(value: object, index: int, name: str) -> object:
+    if isinstance(value, (tuple, list)) and len(value) > index:
+        return value[index]
+    return _field(value, name, "")
+
+
 class TelegramService:
     """Handle `/av` commands, one-time selection callbacks, and status edits."""
 
@@ -272,6 +295,7 @@ class TelegramService:
         anime_provider: Any | None = None,
         allowed_chat_ids: Sequence[int] | set[int] | frozenset[int] = (),
         allowed_user_ids: Sequence[int] | set[int] | frozenset[int] = (),
+        save_paths: Sequence[Any] = (),
         callback_ttl_seconds: int = 900,
         poll_timeout: int = 25,
         clock: Any = time.time,
@@ -282,6 +306,18 @@ class TelegramService:
         self.transport = transport
         self.allowed_chat_ids = frozenset(int(item) for item in allowed_chat_ids)
         self.allowed_user_ids = frozenset(int(item) for item in allowed_user_ids)
+        self.save_paths = tuple(
+            (
+                str(_save_path_field(item, 0, "cid")).strip(),
+                _clip(_save_path_field(item, 1, "name"), 128),
+            )
+            for item in save_paths
+            if _TELEGRAM_SAVE_PATH_CID.fullmatch(
+                str(_save_path_field(item, 0, "cid")).strip()
+            )
+            and _clip(_save_path_field(item, 1, "name"), 128)
+        )
+        self._save_path_map = {cid: name for cid, name in self.save_paths}
         self.callback_ttl_seconds = max(60, min(int(callback_ttl_seconds), 86400))
         self.poll_timeout = max(0, min(int(poll_timeout), 50))
         self.clock = clock
@@ -303,6 +339,89 @@ class TelegramService:
         if chat is None or user is None or chat not in self.allowed_chat_ids:
             return False
         return not self.allowed_user_ids or user in self.allowed_user_ids
+
+    def _path_options(self) -> tuple[tuple[str, str], ...]:
+        return tuple((cid, name) for cid, name in self.save_paths if cid in self._save_path_map)
+
+    def _path_label(self, cid: object) -> str:
+        value = str("" if cid is None else cid).strip()
+        return self._save_path_map.get(value, f"CID {value or '?'}")
+
+    def _preferred_save_path(
+        self,
+        chat_id: int,
+        user_id: int,
+    ) -> tuple[str | None, bool]:
+        """Return (CID, explicitly remembered) without consulting 115."""
+
+        options = self._path_options()
+        preference = None
+        getter = getattr(self.store, "get_telegram_preference", None)
+        if callable(getter):
+            try:
+                value = getter(chat_id, user_id)
+                preference = str((value or {}).get("lastSavePathCid") or "").strip()
+            except Exception:
+                preference = None
+        if preference and preference in self._save_path_map:
+            return preference, True
+        if options:
+            return options[0][0], False
+        # Direct service tests and pre-allowlist local instances historically
+        # used the root CID. Production polling is rejected without a
+        # configured allowlist by Settings.from_env, so this is only a
+        # backwards-compatible in-process fallback.
+        return "0", False
+
+    def _directory_text(self, chat_id: int, user_id: int) -> str:
+        options = self._path_options()
+        if not options:
+            return "未配置 Telegram 保存目录，请先设置 PUSH115_TELEGRAM_SAVE_PATHS。"
+        selected, remembered = self._preferred_save_path(chat_id, user_id)
+        current = self._path_label(selected)
+        source = "上次选择" if remembered else "默认目录"
+        return _clip(f"保存目录\n当前：{current}（{source}）\n请选择目录：", 4096)
+
+    def _directory_keyboard(
+        self,
+        chat_id: int,
+        user_id: int,
+    ) -> tuple[list[list[dict[str, str]]], list[tuple[str, dict[str, Any]]]]:
+        options = self._path_options()
+        selected, remembered = self._preferred_save_path(chat_id, user_id)
+        rows: list[list[dict[str, str]]] = []
+        specs: list[tuple[str, dict[str, Any]]] = []
+        for cid, name in options:
+            token = self._new_callback_token()
+            if cid == selected:
+                prefix = "✓ 当前"
+            elif not remembered and cid == options[0][0]:
+                prefix = "默认"
+            else:
+                prefix = "目录"
+            rows.append(
+                [{"text": _clip(f"{prefix} · {name}", _MAX_BUTTON_TEXT), "callback_data": f"{CALLBACK_PREFIX}{token}"}]
+            )
+            specs.append((token, {"kind": "dir", "cid": cid}))
+        return rows, specs
+
+    @staticmethod
+    def _new_callback_token() -> str:
+        token = secrets.token_urlsafe(18)
+        while not _CALLBACK_TOKEN.fullmatch(token):
+            token = secrets.token_urlsafe(18)
+        return token
+
+    def _job_owner(self, job_id: object, chat_id: int, user_id: int) -> JobRecord | None:
+        getter = getattr(self.store, "get_telegram_job", None)
+        if callable(getter):
+            return getter(str(job_id or "").strip(), chat_id=chat_id, user_id=user_id)
+        record = self.store.get_job(str(job_id or "").strip())
+        if record is None:
+            return None
+        if record.telegram_chat_id != chat_id or record.telegram_user_id != user_id:
+            return None
+        return record
 
     async def _answer(
         self,
@@ -381,6 +500,7 @@ class TelegramService:
         cover_url: str,
         candidate: object,
         callback_token: str,
+        save_path_cid: str | None = None,
         source_site: str = "javbus",
         media_type: str = "jav",
         processor_profile: str = "jav",
@@ -411,7 +531,7 @@ class TelegramService:
                 "btih": btih,
                 "monitorDownload": True,
             },
-            "savePathCid": "0",
+            "savePathCid": save_path_cid,
         }
         if is_anime:
             raw_intent["metadata"].update(
@@ -451,9 +571,7 @@ class TelegramService:
             url, candidate_title, _btih, _key = self._candidate_details(candidate)
             if not url:
                 continue
-            token = secrets.token_urlsafe(18)
-            while not _CALLBACK_TOKEN.fullmatch(token):
-                token = secrets.token_urlsafe(18)
+            token = self._new_callback_token()
             if not is_magnet(url):
                 continue
             try:
@@ -464,6 +582,7 @@ class TelegramService:
                     cover_url=cover_url,
                     candidate=candidate,
                     callback_token=token,
+                    save_path_cid=None,
                     source_site=source_site,
                     media_type=media_type,
                     processor_profile=processor_profile,
@@ -471,7 +590,9 @@ class TelegramService:
                 )
             except (TypeError, ValueError):
                 continue
-            callback_specs.append((token, {"intent": intent, "candidateKey": candidate_key}))
+            callback_specs.append(
+                (token, {"kind": "candidate", "intent": intent, "candidateKey": candidate_key})
+            )
             rows.append(
                 [{"text": _clip(candidate_title or url, _MAX_BUTTON_TEXT), "callback_data": f"{CALLBACK_PREFIX}{token}"}]
             )
@@ -505,11 +626,275 @@ class TelegramService:
             )
         return result
 
+    async def _send_directory_picker(
+        self,
+        chat_id: int,
+        user_id: int,
+        *,
+        prefix: str = "",
+    ) -> Mapping[str, Any]:
+        rows, specs = self._directory_keyboard(chat_id, user_id)
+        text = _clip(f"{prefix}\n{self._directory_text(chat_id, user_id)}".strip(), 4096)
+        result = await self.transport.send_message(
+            chat_id,
+            text,
+            reply_markup={"inline_keyboard": rows} if rows else None,
+        )
+        message_id = _message_id(result)
+        if message_id is None:
+            raise TelegramError("Telegram 消息缺少 message_id")
+        expiry = float(self.clock()) + self.callback_ttl_seconds
+        for token, payload in specs:
+            self.store.create_callback(
+                token,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+                candidate=payload,
+                expires_at=expiry,
+            )
+        return result
+
+    async def _send_status_message(
+        self,
+        record: JobRecord,
+        *,
+        chat_id: int | None = None,
+    ) -> JobRecord:
+        target_chat = record.telegram_chat_id if chat_id is None else chat_id
+        if target_chat is None:
+            return record
+        status = await self.transport.send_message(target_chat, self._status_text(record))
+        status_id = _message_id(status)
+        if status_id is None:
+            return record
+        updated = self.store.set_status_message_id(record.job_id, status_id)
+        self.store.mark_notified(
+            record.job_id,
+            state=updated.status,
+            percent=updated.percent,
+        )
+        return updated
+
+    @staticmethod
+    def _job_link_type(job: JobRecord) -> str:
+        value = str(job.intent.get("linkType") or "").strip().lower()
+        return "ED2K" if value == "ed2k" else "Magnet"
+
+    def _job_title(self, job: JobRecord) -> str:
+        return _clip(
+            job.intent.get("expectedName")
+            or job.intent.get("title")
+            or job.intent.get("code")
+            or job.intent.get("url")
+            or job.job_id,
+            512,
+        )
+
+    def _job_detail_text(self, job: JobRecord) -> str:
+        lines = [
+            "任务详情",
+            f"ID：{_clip(job.job_id, 32)}",
+            f"标题：{self._job_title(job)}",
+            f"类型：{self._job_link_type(job)}",
+            f"目录：{self._path_label(job.intent.get('savePathCid'))}",
+            f"状态：{job.status}",
+        ]
+        if job.percent is not None:
+            lines.append(f"进度：{job.percent:g}%")
+        if job.task_id:
+            lines.append(f"本地任务：{_clip(job.task_id, 96)}")
+        if job.remote_id:
+            lines.append(f"远端标识：{_clip(job.remote_id, 96)}")
+        if job.error_message and job.status in {"failed", "uncertain"}:
+            lines.append(f"错误：{_clip(job.error_message, 800)}")
+        if job.message and job.status not in {"failed", "uncertain"}:
+            lines.append(f"信息：{_clip(job.message, 800)}")
+        return _clip("\n".join(lines), 4096)
+
+    def _job_action_specs(
+        self,
+        job: JobRecord,
+    ) -> list[tuple[str, dict[str, Any], str]]:
+        specs: list[tuple[str, dict[str, Any], str]] = []
+        if job.status in {"queued", "claimed", "accepted", "progress"}:
+            token = self._new_callback_token()
+            specs.append((token, {"kind": "cancel", "jobId": job.job_id}, "取消"))
+        elif job.status == "failed":
+            token = self._new_callback_token()
+            specs.append((token, {"kind": "retry", "jobId": job.job_id}, "重试"))
+        return specs
+
+    async def _send_job_detail(self, chat_id: int, user_id: int, job: JobRecord) -> Mapping[str, Any]:
+        rows: list[list[dict[str, str]]] = []
+        specs = self._job_action_specs(job)
+        for token, _payload, label in specs:
+            rows.append([{"text": label, "callback_data": f"{CALLBACK_PREFIX}{token}"}])
+        result = await self.transport.send_message(
+            chat_id,
+            self._job_detail_text(job),
+            reply_markup={"inline_keyboard": rows} if rows else None,
+        )
+        message_id = _message_id(result)
+        if message_id is None:
+            raise TelegramError("Telegram 消息缺少 message_id")
+        expiry = float(self.clock()) + self.callback_ttl_seconds
+        for token, payload, _label in specs:
+            self.store.create_callback(
+                token,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+                candidate=payload,
+                expires_at=expiry,
+            )
+        return result
+
+    def _jobs_page_text(self, jobs: Sequence[JobRecord], page: int | None = None) -> str:
+        if not jobs:
+            return "暂无属于你的 Telegram 任务。"
+        heading = "任务列表" if page is None else f"任务列表（第 {page} 页）"
+        lines = [heading]
+        for index, job in enumerate(jobs, 1):
+            lines.append(
+                f"{index}. [{job.status}] {_clip(self._job_title(job), 160)} · {_clip(job.job_id, 12)}"
+            )
+        return _clip("\n".join(lines), 4096)
+
+    async def _send_jobs_page(
+        self,
+        chat_id: int,
+        user_id: int,
+        *,
+        cursor: tuple[float, str] | None = None,
+    ) -> Mapping[str, Any]:
+        pager = getattr(self.store, "list_telegram_jobs_page", None)
+        if callable(pager):
+            jobs, next_cursor = pager(
+                chat_id=chat_id,
+                user_id=user_id,
+                limit=_MAX_JOBS,
+                cursor=cursor,
+            )
+        else:
+            jobs = [
+                job
+                for job in reversed(self.store.list_jobs(telegram_only=True, limit=500))
+                if job.telegram_chat_id == chat_id and job.telegram_user_id == user_id
+            ][:_MAX_JOBS]
+            next_cursor = None
+        rows: list[list[dict[str, str]]] = []
+        specs: list[tuple[str, dict[str, Any]]] = []
+        for job in jobs:
+            token = self._new_callback_token()
+            rows.append(
+                [{"text": _clip(f"详情 · {self._job_title(job)}", _MAX_BUTTON_TEXT), "callback_data": f"{CALLBACK_PREFIX}{token}"}]
+            )
+            specs.append((token, {"kind": "job_detail", "jobId": job.job_id}))
+        if next_cursor is not None:
+            token = self._new_callback_token()
+            rows.append([{"text": "下一页", "callback_data": f"{CALLBACK_PREFIX}{token}"}])
+            # Page navigation stays within the callback-kind allowlist; its
+            # server-side cursor never enters Telegram callback_data.
+            specs.append((token, {"kind": "job_detail", "cursor": [next_cursor[0], next_cursor[1]]}))
+        result = await self.transport.send_message(
+            chat_id,
+            self._jobs_page_text(jobs),
+            reply_markup={"inline_keyboard": rows} if rows else None,
+        )
+        message_id = _message_id(result)
+        if message_id is None:
+            raise TelegramError("Telegram 消息缺少 message_id")
+        expiry = float(self.clock()) + self.callback_ttl_seconds
+        for token, payload in specs:
+            self.store.create_callback(
+                token,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+                candidate=payload,
+                expires_at=expiry,
+            )
+        return result
+
+    @staticmethod
+    def _direct_title(url: str) -> str:
+        parsed = parse_ed2k(url)
+        if parsed:
+            return _clip(parsed.get("fileName", "ED2K file"), 512)
+        try:
+            name = unquote(parse_qs(urlsplit(url).query).get("dn", [""])[0]).strip()
+        except (TypeError, ValueError):
+            name = ""
+        return _clip(name or "Magnet", 512)
+
+    async def _handle_add(self, message: Mapping[str, Any], raw_url: str) -> dict[str, Any]:
+        chat_id, user_id = self._chat_user(message)
+        if chat_id is None or user_id is None:
+            return {"handled": True, "error": "invalid_message"}
+        save_path_cid, _remembered = self._preferred_save_path(chat_id, user_id)
+        if not save_path_cid:
+            await self.transport.send_message(chat_id, self._directory_text(chat_id, user_id))
+            return {"handled": True, "error": "save_path_unavailable"}
+        url = str(raw_url or "").strip()
+        if not (is_magnet(url) or is_ed2k(url)):
+            await self.transport.send_message(chat_id, "请输入有效的 Magnet 或 ED2K file 链接。")
+            return {"handled": True, "error": "invalid_link"}
+        raw_intent = {
+            "jobId": f"telegram-{self._new_callback_token()}",
+            "sourceSite": "telegram",
+            "mediaType": "generic",
+            "processorProfile": "generic",
+            "url": url,
+            "title": self._direct_title(url),
+            "code": "",
+            "metadata": {"provider": "telegram", "monitorDownload": True},
+            "savePathCid": save_path_cid,
+        }
+        try:
+            intent = model_dump(IntentModel.model_validate(raw_intent))
+        except (TypeError, ValueError):
+            await self.transport.send_message(chat_id, "链接格式无效，未加入队列。")
+            return {"handled": True, "error": "invalid_link"}
+        source_message_id = _message_id(message) or 0
+        record, inserted = self.store.enqueue(
+            intent,
+            candidate_key=dedupe_key(url),
+            telegram_chat_id=chat_id,
+            telegram_user_id=user_id,
+            telegram_message_id=source_message_id,
+        )
+        await self.transport.send_message(
+            chat_id,
+            "已加入本地队列。" if inserted else "该链接已在本地队列中。",
+        )
+        if inserted and record.status_message_id is None:
+            try:
+                record = await self._send_status_message(record, chat_id=chat_id)
+            except Exception:
+                pass
+        return {
+            "handled": True,
+            "kind": "add",
+            "jobId": record.job_id,
+            "duplicate": not inserted,
+            "savePathCid": save_path_cid,
+        }
+
     async def _handle_command(self, message: Mapping[str, Any]) -> dict[str, Any]:
         chat_id, user_id = self._chat_user(message)
         if not self.authorized(chat_id, user_id):
             return {"ignored": True, "reason": "unauthorized"}
         text = str(message.get("text", "") or "").strip()
+        add_match = _ADD_COMMAND.fullmatch(text)
+        if add_match:
+            return await self._handle_add(message, add_match.group(1))
+        if _DIR_COMMAND.fullmatch(text):
+            result = await self._send_directory_picker(chat_id, user_id)
+            return {"handled": True, "kind": "dir", "messageId": _message_id(result)}
+        if _JOBS_COMMAND.fullmatch(text):
+            result = await self._send_jobs_page(chat_id, user_id)
+            return {"handled": True, "kind": "jobs", "messageId": _message_id(result)}
         match = _AV_COMMAND.fullmatch(text)
         anime_match = _ANIME_COMMAND.fullmatch(text)
         if not match and not anime_match:
@@ -593,6 +978,7 @@ class TelegramService:
         user_id = _int(sender.get("id"))
         callback_id = callback.get("id")
         if not self.authorized(chat_id, user_id):
+            await self._answer(callback_id, text="无权限")
             return {"ignored": True, "reason": "unauthorized"}
         raw_data = str(callback.get("data", "") or "")
         if not raw_data.startswith(CALLBACK_PREFIX):
@@ -607,64 +993,331 @@ class TelegramService:
             await self._answer(callback_id, text="按钮已失效")
             return {"handled": True, "error": "invalid_callback"}
         # Validate the opaque payload before mutating the callback row.  The
-        # actual consume and queue insertion below are one SQLite transaction.
-        # Thus a crash or DB error cannot burn a button without a durable job.
-        candidate = self.store.peek_callback(
-            token,
-            chat_id=chat_id,
-            user_id=user_id,
-            message_id=message_id,
-            now=float(self.clock()),
-        )
-        if not candidate:
-            await self._answer(callback_id, text="按钮已过期或已使用")
-            return {"handled": True, "error": "callback_expired"}
-        raw_intent = _as_mapping(candidate.get("intent"))
+        # actual candidate consume and queue insertion below are one SQLite
+        # transaction; other one-shot actions consume only after their owner
+        # and state have been checked.
         try:
-            validated = IntentModel.model_validate(raw_intent)
-            intent = model_dump(validated)
-            candidate_key = str(candidate.get("candidateKey") or "").strip()
-            if not candidate_key:
-                raise ValueError("callback 缺少候选键")
+            payload = self.store.peek_callback(
+                token,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+                now=float(self.clock()),
+            )
         except Exception:
-            return {"handled": True, "error": "invalid_candidate"}
-        result = self.store.consume_callback_and_enqueue(
-            token,
-            chat_id=chat_id,
-            user_id=user_id,
-            message_id=message_id,
-            intent=intent,
-            candidate_key=candidate_key,
-            now=float(self.clock()),
-        )
-        if result is None:
+            await self._answer(callback_id, text="队列暂时不可用，请稍后重试")
+            return {"handled": True, "error": "queue_unavailable"}
+        if not payload:
             await self._answer(callback_id, text="按钮已过期或已使用")
             return {"handled": True, "error": "callback_expired"}
-        record, inserted = result
-        await self._answer(callback_id, text="已加入本地队列")
-        if inserted and record.status_message_id is None:
+        payload = _as_mapping(payload)
+        raw_kind = payload.get("kind")
+        kind = raw_kind if isinstance(raw_kind, str) else ""
+        payload_keys = set(payload)
+        now = float(self.clock())
+
+        if kind not in _CALLBACK_KINDS:
+            await self._answer(callback_id, text="按钮已失效")
+            return {"handled": True, "error": "invalid_callback"}
+
+        if kind == "candidate":
+            if payload_keys != {"kind", "intent", "candidateKey"}:
+                await self._answer(callback_id, text="按钮已失效")
+                return {"handled": True, "error": "invalid_callback"}
+            raw_intent = dict(_as_mapping(payload.get("intent")))
+            save_path_cid, _remembered = self._preferred_save_path(chat_id, user_id)
+            if not save_path_cid:
+                await self._answer(callback_id, text="未配置保存目录")
+                return {"handled": True, "error": "save_path_unavailable"}
+            raw_intent["savePathCid"] = save_path_cid
             try:
-                status = await self.transport.send_message(
-                    chat_id,
-                    self._status_text(record),
-                )
-                status_id = _message_id(status)
-                if status_id is not None:
-                    record = self.store.set_status_message_id(record.job_id, status_id)
-                    self.store.mark_notified(
-                        record.job_id,
-                        state=record.status,
-                        percent=record.percent,
-                    )
+                validated = IntentModel.model_validate(raw_intent)
+                intent = model_dump(validated)
+                candidate_key_value = payload.get("candidateKey")
+                if not isinstance(candidate_key_value, str):
+                    raise ValueError("callback 候选键类型无效")
+                candidate_key = candidate_key_value.strip()
+                if not candidate_key or len(candidate_key) > 512:
+                    raise ValueError("callback 缺少候选键")
             except Exception:
-                # The durable job remains claimable even when Telegram status
-                # delivery is temporarily unavailable.
+                await self._answer(callback_id, text="按钮已失效")
+                return {"handled": True, "error": "invalid_candidate"}
+            try:
+                result = self.store.consume_callback_and_enqueue(
+                    token,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    intent=intent,
+                    candidate_key=candidate_key,
+                    now=now,
+                )
+            except Exception:
+                # The atomic store transaction leaves this button usable when
+                # queue insertion fails; tell Telegram to stop the spinner
+                # without burning the durable callback.
+                await self._answer(callback_id, text="队列暂时不可用，请稍后重试")
+                return {"handled": True, "error": "queue_unavailable"}
+            if result is None:
+                await self._answer(callback_id, text="按钮已过期或已使用")
+                return {"handled": True, "error": "callback_expired"}
+            record, inserted = result
+            await self._answer(
+                callback_id,
+                text="已加入本地队列" if inserted else "任务已在本地队列中",
+            )
+            if inserted and record.status_message_id is None:
+                try:
+                    record = await self._send_status_message(record, chat_id=chat_id)
+                except Exception:
+                    # The durable job remains claimable even when Telegram
+                    # status delivery is temporarily unavailable.
+                    pass
+            return {
+                "handled": True,
+                "kind": "candidate",
+                "jobId": record.job_id,
+                "duplicate": not inserted,
+                "savePathCid": intent.get("savePathCid"),
+            }
+
+        if kind == "dir":
+            if payload_keys != {"kind", "cid"}:
+                await self._answer(callback_id, text="按钮已失效")
+                return {"handled": True, "error": "invalid_callback"}
+            cid = str(payload.get("cid") or "").strip()
+            if cid not in self._save_path_map:
+                await self._answer(callback_id, text="保存目录已不可用")
+                return {"handled": True, "error": "invalid_save_path"}
+            setter = getattr(self.store, "set_telegram_preference", None)
+            if not callable(setter):
+                await self._answer(callback_id, text="保存目录设置不可用")
+                return {"handled": True, "error": "save_path_unavailable"}
+            try:
+                setter(chat_id, user_id, cid, now=now)
+            except Exception:
+                await self._answer(callback_id, text="保存目录设置失败")
+                return {"handled": True, "error": "save_path_unavailable"}
+            try:
+                try:
+                    consumed = self.store.consume_callback(
+                        token,
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        message_id=message_id,
+                        now=now,
+                    )
+                except Exception:
+                    await self._answer(callback_id, text="队列暂时不可用，请稍后重试")
+                    return {"handled": True, "error": "queue_unavailable"}
+            except Exception:
+                # The preference write is idempotent.  Keep it and let a later
+                # click retry token consumption instead of reporting failure.
+                await self._answer(callback_id, text="目录已保存，请稍后再试")
+                return {"handled": True, "kind": "dir", "savePathCid": cid}
+            if consumed is None:
+                await self._answer(callback_id, text=f"已选择：{self._path_label(cid)}")
+                return {
+                    "handled": True,
+                    "kind": "dir",
+                    "savePathCid": cid,
+                    "duplicate": True,
+                }
+            label = self._path_label(cid)
+            await self._answer(callback_id, text=f"已选择：{label}")
+            try:
+                await self.transport.send_message(chat_id, f"保存目录已切换为：{label}")
+            except Exception:
+                pass
+            return {"handled": True, "kind": "dir", "savePathCid": cid}
+
+        if kind == "job_detail":
+            has_cursor = "cursor" in payload
+            has_job_id = "jobId" in payload
+            if payload_keys not in ({"kind", "cursor"}, {"kind", "jobId"}) or has_cursor == has_job_id:
+                await self._answer(callback_id, text="按钮已失效")
+                return {"handled": True, "error": "invalid_callback"}
+            if has_cursor:
+                raw_cursor = payload.get("cursor")
+                if not isinstance(raw_cursor, (list, tuple)) or len(raw_cursor) != 2:
+                    await self._answer(callback_id, text="按钮已失效")
+                    return {"handled": True, "error": "invalid_cursor"}
+                try:
+                    cursor_time = float(raw_cursor[0])
+                    cursor_id = raw_cursor[1]
+                    if not isinstance(cursor_id, str):
+                        raise ValueError
+                    cursor_id = cursor_id.strip()
+                    if not math.isfinite(cursor_time):
+                        raise ValueError
+                    if not cursor_id or len(cursor_id) > 128:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    await self._answer(callback_id, text="按钮已失效")
+                    return {"handled": True, "error": "invalid_cursor"}
+                try:
+                    consumed = self.store.consume_callback(
+                        token,
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        message_id=message_id,
+                        now=now,
+                    )
+                except Exception:
+                    await self._answer(callback_id, text="队列暂时不可用，请稍后重试")
+                    return {"handled": True, "error": "queue_unavailable"}
+                if consumed is None:
+                    await self._answer(callback_id, text="按钮已过期或已使用")
+                    return {"handled": True, "error": "callback_expired"}
+                try:
+                    result = await self._send_jobs_page(
+                        chat_id, user_id, cursor=(cursor_time, cursor_id)
+                    )
+                except Exception:
+                    await self._answer(callback_id, text="任务列表暂时不可用")
+                    return {"handled": True, "error": "jobs_unavailable"}
+                await self._answer(callback_id, text="已加载下一页")
+                return {
+                    "handled": True,
+                    "kind": "job_detail",
+                    "page": True,
+                    "messageId": _message_id(result),
+                }
+
+            raw_job_id = payload.get("jobId")
+            job_id = raw_job_id.strip() if isinstance(raw_job_id, str) else ""
+            if not job_id or len(job_id) > 128:
+                await self._answer(callback_id, text="按钮已失效")
+                return {"handled": True, "error": "invalid_job"}
+            job = self._job_owner(job_id, chat_id, user_id)
+            if job is None:
+                await self._answer(callback_id, text="任务不存在或无权限")
+                return {"handled": True, "error": "job_not_found"}
+            try:
+                consumed = self.store.consume_callback(
+                    token,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    now=now,
+                )
+            except Exception:
+                await self._answer(callback_id, text="队列暂时不可用，请稍后重试")
+                return {"handled": True, "error": "queue_unavailable"}
+            if consumed is None:
+                await self._answer(callback_id, text="按钮已过期或已使用")
+                return {"handled": True, "error": "callback_expired"}
+            try:
+                result = await self._send_job_detail(chat_id, user_id, job)
+            except Exception:
+                await self._answer(callback_id, text="任务详情暂时不可用")
+                return {"handled": True, "error": "job_unavailable"}
+            await self._answer(callback_id, text="已打开任务详情")
+            return {
+                "handled": True,
+                "kind": "job_detail",
+                "jobId": job.job_id,
+                "messageId": _message_id(result),
+            }
+
+        # retry/cancel callbacks carry a job ID and are accepted only for the
+        # originating Telegram user.  The request ID is derived from the
+        # one-time token, making the database mutation idempotent as well.
+        if payload_keys != {"kind", "jobId"}:
+            await self._answer(callback_id, text="按钮已失效")
+            return {"handled": True, "error": "invalid_callback"}
+        raw_job_id = payload.get("jobId")
+        job_id = raw_job_id.strip() if isinstance(raw_job_id, str) else ""
+        if not job_id or len(job_id) > 128:
+            await self._answer(callback_id, text="按钮已失效")
+            return {"handled": True, "error": "invalid_job"}
+        job = self._job_owner(job_id, chat_id, user_id)
+        if job is None:
+            await self._answer(callback_id, text="任务不存在或无权限")
+            return {"handled": True, "error": "job_not_found"}
+
+        if kind == "retry":
+            if job.status != "failed":
+                await self._answer(callback_id, text="只有失败任务可以重试")
+                return {"handled": True, "error": "invalid_state"}
+            try:
+                retry, replay = self.store.clone_retry(
+                    job.job_id,
+                    request_id=f"telegram-retry-{token}",
+                    now=now,
+                )
+            except Exception:
+                await self._answer(callback_id, text="任务当前不可重试")
+                return {"handled": True, "error": "invalid_state"}
+            try:
+                consumed = self.store.consume_callback(
+                    token,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    now=now,
+                )
+            except Exception:
+                consumed = None
+            await self._answer(callback_id, text="已重新加入本地队列")
+            if not replay and retry.status_message_id is None:
+                try:
+                    await self._send_status_message(retry, chat_id=chat_id)
+                except Exception:
+                    pass
+            return {
+                "handled": True,
+                "kind": "retry",
+                "jobId": retry.job_id,
+                "sourceJobId": job.job_id,
+                "duplicate": replay or consumed is None,
+            }
+
+        if job.status not in {"queued", "claimed", "accepted", "progress"}:
+            await self._answer(callback_id, text="任务已结束，无法取消")
+            return {"handled": True, "error": "invalid_state"}
+        try:
+            action, replay = self.store.request_cancel(
+                job.job_id,
+                request_id=f"telegram-cancel-{token}",
+                reason="Telegram 用户请求取消",
+                now=now,
+            )
+        except Exception:
+            await self._answer(callback_id, text="任务当前不可取消")
+            return {"handled": True, "error": "invalid_state"}
+        try:
+            consumed = self.store.consume_callback(
+                token,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=message_id,
+                now=now,
+            )
+        except Exception:
+            consumed = None
+        current = self._job_owner(job.job_id, chat_id, user_id) or job
+        if current.status == "cancelled":
+            answer_text = "已取消本地排队任务；不会创建 115 云端离线任务"
+        else:
+            answer_text = "已请求浏览器停止本地任务/监控；不会取消 115 云端离线任务"
+        await self._answer(
+            callback_id,
+            text=answer_text,
+        )
+        if not replay:
+            try:
+                await self._send_status_message(current, chat_id=chat_id)
+            except Exception:
                 pass
         return {
             "handled": True,
-            "kind": "callback",
-            "jobId": record.job_id,
-            "duplicate": not inserted,
+            "kind": "cancel",
+            "jobId": job.job_id,
+            "actionId": action.action_id,
+            "actionStatus": action.status,
+            "status": current.status,
+            "duplicate": replay or consumed is None,
         }
 
     async def handle_update(self, update: Mapping[str, Any]) -> dict[str, Any]:
@@ -688,6 +1341,7 @@ class TelegramService:
             "completed": "115 任务已完成",
             "failed": "115 任务失败",
             "uncertain": "提交结果不明确，已停止自动重试",
+            "cancelled": "本地任务已取消；不会取消 115 云端离线任务",
         }
         text = labels.get(job.status, "任务状态已更新")
         if job.percent is not None and job.status in {"progress", "completed"}:

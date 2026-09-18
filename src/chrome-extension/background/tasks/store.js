@@ -3,6 +3,10 @@
 	const { STORAGE_KEYS, normalizeCid, normalizeProcessorProfile } = global.Push115.Config
 	const intentApi = global.Push115.DownloadIntent
 	let writes = Promise.resolve()
+	// A monitor can keep an object reference across an asynchronous 115/API
+	// call.  Keep a small in-memory tombstone so a stale object cannot recreate
+	// a task after cancel() has committed its terminal state.
+	const cancellationTombstones = new Map()
 	// A reset invalidates task objects that were already loaded by a monitor or
 	// submission before the user pressed the reset button.  WeakMap keeps this
 	// generation marker out of the persisted task schema.
@@ -105,6 +109,13 @@
 	async function persistNow(task) {
 		const tasks = await read()
 		const index = tasks.findIndex(item => item.taskId === task.taskId)
+		const existing = index >= 0 ? tasks[index] : null
+		// Cancellation is a terminal local decision.  A monitor object loaded
+		// before that decision must never overwrite it with waiting/processing.
+		if ((existing?.status === 'cancelled' || cancellationTombstones.has(String(task?.taskId || '')))
+			&& task.status !== 'cancelled') {
+			return { skipped: true, cancelled: true }
+		}
 		if (index >= 0) tasks[index] = task
 		else tasks.unshift(task)
 		const active = tasks.filter(taskIsActive).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
@@ -139,6 +150,7 @@
 
 	function resetRuntime() {
 		resetGeneration += 1
+		cancellationTombstones.clear()
 		return serialized(resetRuntimeNow)
 	}
 
@@ -279,6 +291,43 @@
 		return task
 	}
 
+	async function cancel(taskId, options = {}) {
+		const normalizedId = String(taskId || '').trim()
+		if (!normalizedId) return null
+		return serialized(async () => {
+			const records = await read()
+			const task = records.find(item => String(item?.taskId || '').trim() === normalizedId)
+			if (!task) return null
+			if (!taskIsActive(task)) return task
+			cancellationTombstones.set(normalizedId, Date.now())
+			task.status = 'cancelled'
+			task.monitorDownload = false
+			task.metadata = task.metadata && typeof task.metadata === 'object'
+				? { ...task.metadata, monitorDownload: false }
+				: { monitorDownload: false }
+			delete task.beforeSnapshot
+			delete task.preSubmitSnapshot
+			delete task.directPlan
+			delete task.animeTransfer
+			delete task.remoteFolderCid
+			delete task.directFileId
+			delete task.directFileCid
+			delete task.directFid
+			delete task.directCid
+			delete task.percent
+			delete task.completedAt
+			task.lastError = ''
+			task.cancelledAt = Date.now()
+			task.updatedAt = task.cancelledAt
+			task.message = options.source === 'bridge'
+				? '已在本地停止后处理与监控；115 云端离线任务未取消'
+				: '已在本地停止后处理与监控；115 云端离线任务未取消'
+			appendLog(task, task.message)
+			await persistNow(task)
+			return task
+		})
+	}
+
 	global.Push115.Background.TaskStore = {
 		read,
 		persist,
@@ -287,6 +336,8 @@
 		queue,
 		record,
 		retry,
+		cancel,
+		isCancelled: taskId => cancellationTombstones.has(String(taskId || '').trim()),
 		taskIsActive,
 		appendLog,
 		normalizeLegacyIntent,

@@ -73,6 +73,7 @@ const I18N_STRINGS = {
 		task_status_recorded: '已记录',
 		task_status_completed: '已完成',
 		task_status_failed: '失败',
+		task_status_cancelled: '已取消（仅本地）',
 		task_retry: '重试',
 		settings_language_label: '语言 / Language',
 		settings_theme_label: '主题 / Theme',
@@ -121,6 +122,7 @@ const I18N_STRINGS = {
 		task_status_recorded: 'Recorded',
 		task_status_completed: 'Completed',
 		task_status_failed: 'Failed',
+		task_status_cancelled: 'Cancelled (local only)',
 		task_retry: 'Retry',
 		settings_language_label: 'Language',
 		settings_theme_label: 'Theme',
@@ -215,7 +217,7 @@ function formatTaskTime(value) {
 }
 
 function getNormalizedTaskStatus(task) {
-	return ['waiting', 'processing', 'recorded', 'completed', 'failed'].includes(task?.status) ? task.status : 'recorded'
+	return ['waiting', 'processing', 'recorded', 'completed', 'failed', 'cancelled'].includes(task?.status) ? task.status : 'recorded'
 }
 
 function addTaskRetryButton(parent, task) {

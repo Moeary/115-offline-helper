@@ -68,9 +68,29 @@ function environment(options = {}) {
 		{ filename: relative },
 	)
 	load('shared/config.js')
+	load('shared/download-intent.js')
 	context.Push115.Background = {
 		TaskStore: {
 			read: taskStoreRead,
+			cancel: async taskId => {
+				const tasks = Array.isArray(data.push115_tasks) ? data.push115_tasks : []
+				const task = tasks.find(item => String(item?.taskId || '') === String(taskId || ''))
+				if (!task) return null
+				if (['waiting', 'processing'].includes(task.status)) {
+					task.status = 'cancelled'
+					task.monitorDownload = false
+					task.metadata = { ...(task.metadata || {}), monitorDownload: false }
+					delete task.beforeSnapshot
+					delete task.directPlan
+					delete task.animeTransfer
+					delete task.remoteFolderCid
+					delete task.directFileId
+					delete task.directFileCid
+					delete task.percent
+					task.message = '已在本地停止后处理与监控；115 云端离线任务未取消'
+				}
+				return task
+			},
 			persist: async task => {
 				const tasks = Array.isArray(data.push115_tasks) ? data.push115_tasks : []
 				const index = tasks.findIndex(item => item.taskId === task.taskId)
@@ -113,7 +133,7 @@ const job = (jobId = 'job-1') => ({
 	jobId,
 	leaseId: 'lease-1',
 	intent: {
-		url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef&dn=ABC-123',
+		url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&dn=ABC-123',
 		title: 'ABC-123',
 		sourceSite: 'javbus',
 		mediaType: 'jav',
@@ -191,7 +211,7 @@ test('bridge worker id is a stable random per-profile value', async () => {
 	const e = environment({
 		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
 		fetchHandler: async (url, request) => {
-			if (url.endsWith('/claim')) workerIds.push(JSON.parse(request.body).workerId)
+			if (url.endsWith('/v1/jobs/claim')) workerIds.push(JSON.parse(request.body).workerId)
 			return response({ schema: 1, job: null })
 		},
 	})
@@ -272,6 +292,132 @@ test('claim preserves only the explicit Nyaa Anime route and removes nested secr
 	assert.equal(e.routerCalls[0].metadata.cookie, undefined)
 })
 
+test('generic canonical intent accepts a non-hardcoded source and uses the Bridge default CID', () => {
+	const e = environment()
+	const intent = e.client.safeIntent({
+		url: 'magnet:?xt=urn:btih:abcdefabcdefabcdefabcdefabcdefab&dn=Anime+01',
+		title: 'Anime 01',
+		sourceSite: 'mikan',
+		mediaType: 'anime',
+		processorProfile: 'anime',
+		metadata: {
+			provider: 'mikan',
+			pageUrl: 'https://mikan.example/episode/1',
+			secret: 'drop-me',
+			headers: { Authorization: 'drop-me' },
+			animeTarget: { cid: 'unsafe' },
+			skipSubmitted: false,
+		},
+	}, 'mikan-job', '42')
+	assert.equal(intent.sourceSite, 'mikan')
+	assert.equal(intent.mediaType, 'anime')
+	assert.equal(intent.processorProfile, 'anime')
+	assert.equal(intent.savePathCid, '42')
+	assert.equal(intent.linkType, 'magnet')
+	assert.equal(intent.metadata.provider, 'mikan')
+	assert.equal(intent.metadata.bridgeJobId, 'mikan-job')
+	assert.equal(intent.metadata.monitorDownload, true)
+	assert.equal(intent.metadata.secret, undefined)
+	assert.equal(intent.metadata.headers, undefined)
+	assert.equal(intent.metadata.animeTarget, undefined)
+	assert.equal(intent.metadata.skipSubmitted, undefined)
+})
+
+test('generic canonical intent preserves ED2K link identity and expected fields', () => {
+	const e = environment()
+	const url = 'ed2k://|file|%5BGroup%5D%20sample.mp4|789|ABCDEF0123456789ABCDEF0123456789|/'
+	const intent = e.client.safeIntent({
+		url,
+		sourceSite: 'southplus',
+		mediaType: 'generic',
+		processorProfile: 'generic',
+	}, 'ed2k-job', '42')
+	assert.equal(intent.linkType, 'ed2k')
+	assert.equal(intent.expectedName, '[Group] sample.mp4')
+	assert.equal(intent.expectedSize, 789)
+	assert.equal(intent.expectedHash, 'abcdef0123456789abcdef0123456789')
+	assert.equal(intent.metadata.ed2kFileName, '[Group] sample.mp4')
+	assert.equal(intent.metadata.ed2kSize, 789)
+	assert.equal(intent.metadata.ed2kHash, 'abcdef0123456789abcdef0123456789')
+})
+
+test('Bridge default CID only fills a missing value and keeps explicit root or numeric CIDs', () => {
+	const e = environment()
+	const base = {
+		url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
+		sourceSite: 'generic',
+		mediaType: 'generic',
+		processorProfile: 'generic',
+	}
+	assert.equal(e.client.safeIntent(base, 'cid-missing', '42').savePathCid, '42')
+	assert.equal(e.client.safeIntent({ ...base, savePathCid: '0' }, 'cid-root', '42').savePathCid, '0')
+	assert.equal(e.client.safeIntent({ ...base, savePathCid: '123' }, 'cid-explicit', '42').savePathCid, '123')
+	assert.throws(() => e.client.safeIntent({ ...base, savePathCid: 'not-a-cid' }, 'cid-invalid', '42'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+})
+
+test('canonical bridge validation rejects invalid source/profile and Jav intents without a code', () => {
+	const e = environment()
+	const base = {
+		url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
+		sourceSite: 'generic',
+		mediaType: 'generic',
+		processorProfile: 'generic',
+	}
+	assert.throws(() => e.client.safeIntent({ ...base, sourceSite: 'bad source' }, 'invalid-source', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...base, processorProfile: 'unknown' }, 'invalid-profile', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...base, processorProfile: 'jav' }, 'missing-code', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+})
+
+test('Bridge rejects non-BTIH magnets and enforces server field limits', () => {
+	const e = environment()
+	const base = {
+		url: 'magnet:?xt=urn:foo:0123456789abcdef0123456789abcdef01234567',
+		sourceSite: 'generic', mediaType: 'generic', processorProfile: 'generic',
+	}
+	assert.throws(() => e.client.safeIntent(base, 'non-btih', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	for (const invalidPrefix of ['0', '1', '8', '9']) {
+		assert.throws(() => e.client.safeIntent({ ...base, url: `magnet:?xt=urn:btih:${invalidPrefix.repeat(32)}` }, `invalid-btih-${invalidPrefix}`, '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	}
+	const valid = {
+		url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
+		sourceSite: 'generic', mediaType: 'generic', processorProfile: 'generic',
+	}
+	assert.throws(() => e.client.safeIntent({ ...valid, code: 'A'.repeat(65) }, 'long-code', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...valid, expectedName: 'N'.repeat(1025) }, 'long-name', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...valid, metadata: { expectedName: 'N'.repeat(1025) } }, 'metadata-long-name', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...valid, metadata: { fileName: 'N'.repeat(1025) } }, 'metadata-long-file-name', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...valid, metadata: { ed2kFileName: 'N'.repeat(1025) } }, 'metadata-long-ed2k-file-name', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	const maxSize = '9223372036854775807'
+	assert.equal(e.client.safeIntent({ ...valid, expectedSize: maxSize }, 'max-size', '0').expectedSize, maxSize)
+	assert.throws(() => e.client.safeIntent({ ...valid, expectedSize: '9223372036854775808' }, 'large-size', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...valid, metadata: { expectedSize: '9223372036854775808' } }, 'metadata-large-size', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent(valid, 'long-cid', '1'.repeat(65)), error => error?.code === 'BRIDGE_INVALID_INTENT')
+})
+
+test('Bridge canonicalizes strict ED2K fields and rejects embedded whitespace or oversized links', () => {
+	const e = environment()
+	const base = { sourceSite: 'generic', mediaType: 'generic', processorProfile: 'generic' }
+	const padded = 'ed2k://|file|sample%20file.mkv|000123|abcdef0123456789abcdef0123456789|/'
+	const intent = e.client.safeIntent({ ...base, url: padded, metadata: {
+		fileName: 'wrong-name', ed2kFileName: 'wrong-name', ed2kSize: '999', ed2kHash: '0123456789abcdef0123456789abcdef',
+	} }, 'ed2k-padded', '0')
+	assert.equal(intent.expectedName, 'sample file.mkv')
+	assert.equal(intent.expectedSize, 123)
+	assert.equal(intent.metadata.fileName, 'sample file.mkv')
+	assert.equal(intent.metadata.ed2kFileName, 'sample file.mkv')
+	assert.equal(intent.metadata.ed2kSize, 123)
+	assert.equal(intent.metadata.ed2kHash, 'abcdef0123456789abcdef0123456789')
+	const longName = 'N'.repeat(600)
+	const longNameIntent = e.client.safeIntent({ ...base, url: `ed2k://|file|${encodeURIComponent(longName)}|123|abcdef0123456789abcdef0123456789|/` }, 'ed2k-long-title', '0')
+	assert.equal(longNameIntent.expectedName, longName)
+	assert.equal(longNameIntent.title, longName.slice(0, 512))
+	const oversizedFileName = encodeURIComponent('N'.repeat(1025))
+	assert.throws(() => e.client.safeIntent({ ...base, url: `ed2k://|file|${oversizedFileName}|123|abcdef0123456789abcdef0123456789|/` }, 'ed2k-long-name', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...base, url: 'ed2k://|file|sample|12 3|abcdef0123456789abcdef0123456789|/' }, 'ed2k-space', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...base, url: 'ed2k://|file|sample|9223372036854775808|abcdef0123456789abcdef0123456789|/' }, 'ed2k-large', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+	assert.throws(() => e.client.safeIntent({ ...base, url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567', expectedSize: '12 3' }, 'size-space', '0'), error => error?.code === 'BRIDGE_INVALID_INTENT')
+})
+
 test('deeply nested bridge secrets are truncated before Router submission', async () => {
 	const deep = {}
 	let cursor = deep
@@ -304,7 +450,7 @@ test('deeply nested bridge secrets are truncated before Router submission', asyn
 	assert.equal(JSON.stringify(e.routerCalls[0]).includes('deep-secret-must-not-appear'), false)
 })
 
-test('invalid bridge intent route is rejected before Router submission', async () => {
+test('invalid bridge intent source label is rejected before Router submission', async () => {
 	const e = environment({
 		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
 		fetchHandler: async (url, request) => {
@@ -317,7 +463,7 @@ test('invalid bridge intent route is rejected before Router submission', async (
 		...job('invalid-route-job'),
 		intent: {
 			...job('invalid-route-job').intent,
-			sourceSite: 'nyaa',
+			sourceSite: 'Nyaa Source',
 			mediaType: 'jav',
 			processorProfile: 'jav',
 			code: 'ABC-123',
@@ -475,7 +621,8 @@ test('TaskStore read failure prevents claiming or resubmitting a bridge job', as
 	const result = await e.client.processPending()
 	assert.equal(result.error, 'BRIDGE_POLL_FAILED')
 	assert.equal(e.routerCalls.length, 0)
-	assert.equal(e.calls.length, 0)
+	assert.equal(e.calls.length, 1)
+	assert.equal(e.calls[0][0], 'http://127.0.0.1:52115/v1/actions/claim')
 	assert.equal((await e.client.readJobs())['job-1'].status, 'claimed')
 })
 
@@ -595,12 +742,214 @@ test('recorded local history reports progress and never completed', async () => 
 	assert.equal(events.some(item => item.state === 'completed'), false)
 })
 
+function actionClaim(actionId, jobId, taskId, overrides = {}) {
+	return {
+		actionId,
+		jobId,
+		actionType: 'cancel_task',
+		type: 'cancel_task',
+		leaseId: `${actionId}-lease`,
+		...overrides,
+		job: {
+			jobId,
+			taskId,
+			status: 'accepted',
+			...(overrides.job || {}),
+		},
+	}
+}
+
+test('cancel_task applies to the exact local task and never calls the 115 Router', async () => {
+	const events = []
+	const e = environment({
+		data: {
+			push115_bridge_enabled: true,
+			push115_bridge_token: 'secret-token',
+			push115_tasks: [{ taskId: 'local-target', status: 'processing', percent: 60, metadata: { bridgeJobId: 'cancel-job' } }],
+		},
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/v1/actions/claim')) return response({ schema: 1, action: actionClaim('action-1', 'cancel-job', 'local-target') })
+			if (url.includes('/v1/actions/action-1/events')) {
+				events.push(JSON.parse(request.body))
+				return response({ schema: 1 })
+			}
+			if (url.endsWith('/v1/jobs/claim')) return response({ schema: 1, job: null })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	const result = await e.client.processPending()
+	assert.equal(result.actionId, 'action-1')
+	assert.equal(events[0].state, 'applied')
+	assert.equal(events[0].result.taskId, 'local-target')
+	assert.equal(events[0].result.localTaskFound, true)
+	assert.equal(e.data.push115_tasks[0].status, 'cancelled')
+	assert.equal(e.data.push115_tasks[0].percent, undefined)
+	assert.equal(e.routerCalls.length, 0)
+	assert.equal((await e.client.readJobs())['cancel-job'].status, 'cancelled')
+})
+
+test('cancel_task with a null taskId resolves the unique local task by bridge job ID', async () => {
+	const events = []
+	const e = environment({
+		data: {
+			push115_bridge_enabled: true,
+			push115_bridge_token: 'secret-token',
+			push115_tasks: [{ taskId: 'mapped-task', status: 'waiting', metadata: { bridgeJobId: 'mapped-job' } }],
+		},
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/v1/actions/claim')) return response({ schema: 1, action: actionClaim('action-null-task', 'mapped-job', null) })
+			if (url.includes('/v1/actions/action-null-task/events')) {
+				events.push(JSON.parse(request.body))
+				return response({ schema: 1 })
+			}
+			if (url.endsWith('/v1/jobs/claim')) return response({ schema: 1, job: null })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	await e.client.processPending()
+	assert.equal(events[0].state, 'applied')
+	assert.equal(events[0].result.taskId, 'mapped-task')
+	assert.equal(e.data.push115_tasks[0].status, 'cancelled')
+})
+
+test('cancel_task returns noop for an already terminal Bridge job and failed for an unknown action type', async () => {
+	const events = []
+	let calls = 0
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/v1/actions/claim')) {
+				calls += 1
+				if (calls === 1) return response({ schema: 1, action: actionClaim('action-noop', 'done-job', 'missing-task', { job: { status: 'completed' } }) })
+				return response({ schema: 1, action: actionClaim('action-unknown', 'unknown-job', null, { actionType: 'delete_task', type: 'delete_task' }) })
+			}
+			if (url.includes('/v1/actions/') && url.endsWith('/events')) {
+				events.push(JSON.parse(request.body))
+				return response({ schema: 1 })
+			}
+			if (url.endsWith('/v1/jobs/claim')) return response({ schema: 1, job: null })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	await e.client.processPending()
+	await e.client.processPending()
+	assert.equal(events[0].state, 'noop')
+	assert.equal(events[1].state, 'failed')
+	assert.equal(events[1].errorCode, 'UNSUPPORTED_ACTION')
+})
+
+test('malformed action payload is durably failed and acknowledged after claim', async () => {
+	const events = []
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/v1/actions/claim')) return response({ schema: 1, action: {
+				actionId: 'malformed-action', jobId: 'malformed-job', leaseId: 'malformed-lease', actionType: 'cancel_task',
+			} })
+			if (url.includes('/v1/actions/malformed-action/events')) {
+				events.push(JSON.parse(request.body))
+				return response({ schema: 1 })
+			}
+			if (url.endsWith('/v1/jobs/claim')) return response({ schema: 1, job: null })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	await e.client.processPending()
+	assert.equal(events[0].state, 'failed')
+	assert.equal(events[0].errorCode, 'ACTION_JOB_MISSING')
+	assert.equal((await e.client.readActions())['malformed-action'].status, 'failed')
+})
+
+test('action claim rejects conflicting nested job and type fields with a terminal ACK', async () => {
+	const events = []
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/v1/actions/claim')) return response({ schema: 1, action: {
+				actionId: 'conflict-action', jobId: 'job-a', leaseId: 'conflict-lease',
+				actionType: 'cancel_task', type: 'other_task',
+				job: { jobId: 'job-b', taskId: 'task-a', status: 'accepted' },
+			} })
+			if (url.includes('/v1/actions/conflict-action/events')) {
+				events.push(JSON.parse(request.body))
+				return response({ schema: 1 })
+			}
+			if (url.endsWith('/v1/jobs/claim')) return response({ schema: 1, job: null })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	await e.client.processPending()
+	assert.equal(events[0].state, 'failed')
+	assert.equal(events[0].errorCode, 'ACTION_JOB_INVALID')
+})
+
+test('action event outbox retries with the same event ID after a worker restart', async () => {
+	let fail = true
+	const events = []
+	const data = {
+		push115_bridge_enabled: true,
+		push115_bridge_token: 'secret-token',
+		push115_tasks: [{ taskId: 'restart-task', status: 'processing', metadata: { bridgeJobId: 'restart-job' } }],
+	}
+	const e = environment({
+		data,
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/v1/actions/claim')) return response({ schema: 1, action: actionClaim('restart-action', 'restart-job', 'restart-task') })
+			if (url.includes('/v1/actions/restart-action/events')) {
+				events.push(JSON.parse(request.body))
+				if (fail) throw new Error('bridge unavailable')
+				return response({ schema: 1 })
+			}
+			if (url.endsWith('/v1/jobs/claim')) return response({ schema: 1, job: null })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	await e.client.processPending()
+	const firstEventId = events[0].eventId
+	assert.equal((await e.client.readActionOutbox())[0].eventId, firstEventId)
+	fail = false
+	await e.client.processPending()
+	assert.equal(events[1].eventId, firstEventId)
+	assert.deepEqual(await e.client.readActionOutbox(), [])
+	assert.equal((await e.client.readActions())['restart-action'].status, 'applied')
+})
+
+test('a running cancel_task is safely re-executed after restart', async () => {
+	const events = []
+	const e = environment({
+		data: {
+			push115_bridge_enabled: true,
+			push115_bridge_token: 'secret-token',
+			push115_bridge_actions: {
+				'running-action': {
+					actionId: 'running-action', jobId: 'running-job', leaseId: 'running-lease', actionType: 'cancel_task',
+					taskId: 'running-task', jobStatus: 'accepted', status: 'running',
+				},
+			},
+			push115_tasks: [{ taskId: 'running-task', status: 'processing', metadata: { bridgeJobId: 'running-job' } }],
+		},
+		fetchHandler: async (url, request) => {
+			if (url.includes('/v1/actions/running-action/events')) {
+				events.push(JSON.parse(request.body))
+				return response({ schema: 1 })
+			}
+			if (url.endsWith('/v1/actions/claim')) return response({ schema: 1, action: null })
+			if (url.endsWith('/v1/jobs/claim')) return response({ schema: 1, job: null })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	await e.client.processPending()
+	assert.equal(events[0].state, 'applied')
+	assert.equal(e.data.push115_tasks[0].status, 'cancelled')
+	assert.equal((await e.client.readActions())['running-action'].status, 'applied')
+})
+
 test('concurrent alarm calls collapse into one poll', async () => {
 	let claimCount = 0
 	const e = environment({
 		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
 		fetchHandler: async url => {
-			if (url.endsWith('/claim')) {
+		if (url.endsWith('/v1/jobs/claim')) {
 				claimCount += 1
 				await new Promise(resolve => setTimeout(resolve, 10))
 			}

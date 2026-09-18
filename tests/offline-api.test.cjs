@@ -60,7 +60,7 @@ async function addTaskWithResponse(finalResponse) {
 	const environment = offlineContext(finalResponse)
 	try {
 		const result = await environment.context.Push115.Background.OfflineApi.addTask(
-			'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef',
+			'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
 			'42',
 		)
 		return { result, clientCalls: environment.clientCalls }
@@ -123,7 +123,7 @@ function bridgeEnvironment(finalResponse) {
 						jobId: 'job-real-offline',
 						leaseId: 'lease-real-offline',
 						intent: {
-							url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef',
+							url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567',
 							sourceSite: 'javbus',
 							mediaType: 'jav',
 							processorProfile: 'jav',
@@ -155,6 +155,7 @@ function bridgeEnvironment(finalResponse) {
 		Push115: {},
 	})
 	load(context, 'shared/config.js')
+	load(context, 'shared/download-intent.js')
 	const background = context.Push115.Background = {
 		Client: {
 			async data(details) {

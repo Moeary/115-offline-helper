@@ -17,7 +17,26 @@
 	const REQUEST_TIMEOUT_MS = 15000
 	const MAX_OUTBOX = 200
 	const MAX_JOBS = 500
-	const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'uncertain'])
+	const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'uncertain', 'cancelled'])
+	const TERMINAL_ACTION_STATES = new Set(['applied', 'failed', 'uncertain', 'noop'])
+	const ACTION_TYPES = new Set(['cancel_task'])
+	const ACTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+	const MAX_INT64 = 9223372036854775807n
+	const INTENT_MEDIA_TYPES = new Set(['generic', 'jav', 'anime'])
+	const INTENT_PROCESSOR_PROFILES = new Set(['generic', 'jav', 'anime'])
+	const SAFE_SOURCE_SITE = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/
+	const BRIDGE_METADATA_KEYS = new Set([
+		'provider', 'pageUrl', 'coverUrl', 'originalTitle', 'candidateTitle', 'detailUrl', 'guid',
+		'btih', 'fileName', 'ed2kFileName', 'ed2kSize', 'ed2kHash', 'expectedName', 'expectedSize',
+		'expectedHash', 'pageCode', 'linkType', 'monitorDownload',
+	])
+	const BRIDGE_METADATA_TEXT_KEYS = new Set([
+		'provider', 'pageUrl', 'coverUrl', 'originalTitle', 'candidateTitle', 'detailUrl', 'guid',
+		'btih', 'fileName', 'ed2kFileName', 'ed2kHash', 'expectedName', 'expectedHash', 'pageCode',
+		'linkType',
+	])
+	const BRIDGE_METADATA_NUMBER_KEYS = new Set(['ed2kSize', 'expectedSize'])
+	const BRIDGE_METADATA_BOOLEAN_KEYS = new Set(['monitorDownload'])
 	let running = false
 	let mutationChain = Promise.resolve()
 	let workerIdPromise = null
@@ -52,6 +71,8 @@
 	const JOBS_KEY = key('BRIDGE_JOBS', 'push115_bridge_jobs')
 	const OUTBOX_KEY = key('BRIDGE_OUTBOX', 'push115_bridge_outbox')
 	const TASKS_KEY = key('TASKS', 'push115_tasks')
+	const ACTIONS_KEY = key('BRIDGE_ACTIONS', 'push115_bridge_actions')
+	const ACTION_OUTBOX_KEY = key('BRIDGE_ACTION_OUTBOX', 'push115_bridge_action_outbox')
 
 	function normalizeCid(value, fallback = '0') {
 		if (typeof configApi.normalizeCid === 'function') return configApi.normalizeCid(value, fallback)
@@ -106,7 +127,7 @@
 		return {
 			enabled: values[ENABLED_KEY] === true,
 			token: String(values[TOKEN_KEY] || '').trim(),
-			targetCid: normalizeCid(values[TARGET_CID_KEY], '0'),
+			defaultCid: normalizeCid(values[TARGET_CID_KEY], '0'),
 		}
 	}
 
@@ -149,10 +170,65 @@
 		return jobs
 	}
 
+	function normalizeActions(value) {
+		if (Array.isArray(value)) {
+			return Object.fromEntries(value
+				.filter(item => item && typeof item === 'object' && ACTION_ID_PATTERN.test(String(item.actionId || '').trim()))
+				.map(item => [String(item.actionId).trim(), { ...item, actionId: String(item.actionId).trim() }]))
+		}
+		if (!value || typeof value !== 'object') return {}
+		const actions = {}
+		for (const [actionId, item] of Object.entries(value)) {
+			if (!item || typeof item !== 'object') continue
+			const normalized = String(item.actionId || actionId || '').trim()
+			if (ACTION_ID_PATTERN.test(normalized)) actions[normalized] = { ...item, actionId: normalized }
+		}
+		return actions
+	}
+
+	async function readActions() {
+		const values = await getStorage(ACTIONS_KEY)
+		return normalizeActions(values[ACTIONS_KEY])
+	}
+
+	async function writeActions(actions, protectedActionIds = []) {
+		const protectedIds = new Set(protectedActionIds || [])
+		const entries = Object.entries(normalizeActions(actions))
+		if (entries.length > MAX_JOBS) {
+			const active = entries.filter(([actionId, item]) => !TERMINAL_ACTION_STATES.has(item.status) || protectedIds.has(actionId))
+			const historical = entries
+				.filter(([actionId, item]) => TERMINAL_ACTION_STATES.has(item.status) && !protectedIds.has(actionId))
+				.sort(([, left], [, right]) => Number(left.updatedAt || 0) - Number(right.updatedAt || 0))
+			const keepHistorical = Math.max(0, MAX_JOBS - active.length)
+			actions = Object.fromEntries([
+				...active,
+				...(keepHistorical > 0 ? historical.slice(-keepHistorical) : []),
+			])
+		}
+		await setStorage({ [ACTIONS_KEY]: actions })
+		return actions
+	}
+
 	async function readOutbox() {
 		const values = await getStorage(OUTBOX_KEY)
 		if (!Array.isArray(values[OUTBOX_KEY])) return []
 		return values[OUTBOX_KEY].filter(item => item && typeof item === 'object' && String(item.eventId || '').trim())
+	}
+
+	async function readActionOutbox() {
+		const values = await getStorage(ACTION_OUTBOX_KEY)
+		if (!Array.isArray(values[ACTION_OUTBOX_KEY])) return []
+		return values[ACTION_OUTBOX_KEY].filter(item => item && typeof item === 'object' && String(item.eventId || '').trim())
+	}
+
+	async function writeActionOutbox(outbox) {
+		const list = Array.isArray(outbox) ? outbox : []
+		const ordered = list.slice().sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0))
+		// Action acknowledgements are all durable terminal transitions. Keep them
+		// until the Bridge accepts them instead of dropping old receipts at a
+		// soft capacity boundary.
+		await setStorage({ [ACTION_OUTBOX_KEY]: ordered })
+		return ordered
 	}
 
 	async function writeOutbox(outbox) {
@@ -224,8 +300,9 @@
 
 	function bridgeUrl(path) {
 		const rawPath = String(path || '')
-		const eventPath = /^\/v1\/jobs\/[^\/?#]+\/events$/
-		if (rawPath !== '/v1/jobs/claim' && !eventPath.test(rawPath)) {
+		const jobEventPath = /^\/v1\/jobs\/[^\/?#]+\/events$/
+		const actionEventPath = /^\/v1\/actions\/[^\/?#]+\/events$/
+		if (rawPath !== '/v1/jobs/claim' && rawPath !== '/v1/actions/claim' && !jobEventPath.test(rawPath) && !actionEventPath.test(rawPath)) {
 			throw bridgeError('bridge 路径无效', 'BRIDGE_INVALID_PATH')
 		}
 		let url
@@ -315,50 +392,541 @@
 		return workerIdPromise
 	}
 
-	function safeIntent(rawIntent, jobId, targetCid) {
-		const input = rawIntent?.intent && typeof rawIntent.intent === 'object' ? rawIntent.intent : rawIntent
-		const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
-		const scrubObject = (value, depth = 0) => {
-			if (depth > 6) return null
-			if (value === null || value === undefined) return value
-			if (Array.isArray(value)) return value.slice(0, 100).map(item => scrubObject(item, depth + 1))
-			if (typeof value !== 'object') return value
-			const result = {}
-			for (const [name, item] of Object.entries(value)) {
-				if (/token|authorization|cookie|secret|headers|password|credential|auth/i.test(name)) continue
-				result[name] = scrubObject(item, depth + 1)
+	function normalizeActionId(value, field = 'actionId') {
+		const id = String(value || '').trim()
+		if (!ACTION_ID_PATTERN.test(id)) throw bridgeError(`bridge action ${field} 无效`, 'BRIDGE_INVALID_ACTION', { uncertain: true })
+		return id
+	}
+
+	function normalizeActionClaim(result) {
+		if (!result || result.schema !== 1) throw bridgeError('bridge action claim schema 无效', 'BRIDGE_INVALID_ACTION', { uncertain: true })
+		const raw = result.action
+		if (raw === undefined || raw === null) return null
+		if (!raw || typeof raw !== 'object' || Array.isArray(raw) || (raw.schema !== undefined && raw.schema !== 1)) throw bridgeError('bridge action 响应格式无效', 'BRIDGE_INVALID_ACTION', { uncertain: true })
+		const actionId = normalizeActionId(raw.actionId)
+		const leaseId = normalizeActionId(raw.leaseId, 'leaseId')
+		const job = raw.job
+		const validationErrors = []
+		const validId = value => ACTION_ID_PATTERN.test(String(value || '').trim())
+		const rawJobId = String(raw.jobId || '').trim()
+		const nestedJobId = job && typeof job === 'object' && !Array.isArray(job) ? String(job.jobId || '').trim() : ''
+		const jobId = validId(rawJobId) ? rawJobId : validId(nestedJobId) ? nestedJobId : ''
+		if (!validId(rawJobId) || (nestedJobId && nestedJobId !== rawJobId)) validationErrors.push({ code: 'ACTION_JOB_INVALID', message: 'action jobId 与嵌套 job 不一致或无效' })
+		const actionTypeValue = String(raw.actionType || '').trim().toLowerCase()
+		const typeValue = String(raw.type || '').trim().toLowerCase()
+		const actionType = actionTypeValue || typeValue
+		if (actionTypeValue && typeValue && actionTypeValue !== typeValue) validationErrors.push({ code: 'ACTION_TYPE_MISMATCH', message: 'actionType 与 type 不一致' })
+		if (!/^[a-z][a-z0-9_.:-]{0,63}$/.test(actionType)) validationErrors.push({ code: 'ACTION_TYPE_INVALID', message: 'bridge action 类型无效' })
+		let taskId = ''
+		if (job && typeof job === 'object' && !Array.isArray(job)) {
+			if (job.taskId !== undefined && job.taskId !== null && String(job.taskId).trim() !== '') {
+				if (validId(job.taskId)) taskId = String(job.taskId).trim()
+				else validationErrors.push({ code: 'ACTION_TASK_INVALID', message: 'bridge action taskId 无效' })
 			}
-			return result
+		} else {
+			validationErrors.push({ code: 'ACTION_JOB_MISSING', message: 'bridge action 缺少 job' })
 		}
-		const safeSource = scrubObject(source)
-		const requestedRoute = [
-			String(safeSource.sourceSite || '').trim().toLowerCase(),
-			String(safeSource.mediaType || '').trim().toLowerCase(),
-			String(safeSource.processorProfile || '').trim().toLowerCase(),
-		]
-		const validJav = requestedRoute[0] === 'javbus' && requestedRoute[1] === 'jav' && requestedRoute[2] === 'jav'
-		const validAnime = requestedRoute[0] === 'nyaa' && requestedRoute[1] === 'anime' && requestedRoute[2] === 'anime'
-		if (!validJav && !validAnime) {
-			throw bridgeError('bridge intent 路由无效', 'BRIDGE_INVALID_INTENT')
-		}
-		const route = validAnime
-			? { sourceSite: 'nyaa', mediaType: 'anime', processorProfile: 'anime' }
-			: { sourceSite: 'javbus', mediaType: 'jav', processorProfile: 'jav' }
-		const metadata = safeSource.metadata && typeof safeSource.metadata === 'object' && !Array.isArray(safeSource.metadata)
-			? safeSource.metadata : {}
-		metadata.bridgeJobId = jobId
-		metadata.monitorDownload = true
 		return {
-			...safeSource,
+			actionId,
 			jobId,
-			sourceSite: route.sourceSite,
-			url: String(source.url || source.magnet || '').trim(),
-			mediaType: route.mediaType,
-			processorProfile: route.processorProfile,
-			code: route.mediaType === 'anime' ? '' : String(safeSource.code || '').trim(),
-			savePathCid: normalizeCid(targetCid || source.savePathCid, '0'),
+			leaseId,
+			actionType,
+			taskId,
+			jobStatus: normalizeClaimStatus(job?.status),
+			validationError: validationErrors[0] || null,
+			status: 'claimed',
+			createdAt: now(),
+			updatedAt: now(),
+		}
+	}
+
+	async function updateAction(actionId, patch = {}) {
+		return serial(async () => {
+			const actions = await readActions()
+			const current = actions[actionId]
+			if (!current) return null
+			actions[actionId] = { ...current, ...patch, actionId, updatedAt: now() }
+			await writeActions(actions)
+			return actions[actionId]
+		})
+	}
+
+	async function persistActionClaim(action) {
+		return serial(async () => {
+			const actions = await readActions()
+			const current = actions[action.actionId]
+			if (current && TERMINAL_ACTION_STATES.has(current.status)) return current
+			actions[action.actionId] = {
+			...(current || {}),
+			...action,
+			status: current?.status === 'running' ? 'running' : (current?.status || action.status || 'claimed'),
+			createdAt: current?.createdAt || action.createdAt || now(),
+			updatedAt: now(),
+			}
+			await writeActions(actions)
+			return actions[action.actionId]
+		})
+	}
+
+	function safeActionResult(value) {
+		if (value === undefined || value === null) return undefined
+		if (typeof value === 'string') return { message: scrub(value, 1024) }
+		if (!value || typeof value !== 'object' || Array.isArray(value)) return { message: scrub(value, 1024) }
+		const result = {}
+		for (const keyName of ['taskId', 'status', 'scope', 'message', 'bridgeJobStatus']) {
+			if (value[keyName] === undefined || value[keyName] === null) continue
+			if (typeof value[keyName] !== 'string' && typeof value[keyName] !== 'number') continue
+			result[keyName] = scrub(value[keyName], keyName === 'message' ? 1024 : 256)
+		}
+		if (typeof value.localTaskFound === 'boolean') result.localTaskFound = value.localTaskFound
+		return result
+	}
+
+	function actionEventFingerprint(state, details = {}) {
+		return JSON.stringify([
+			state,
+			safeActionResult(details.result),
+			String(details.errorCode || ''),
+			String(details.errorMessage || ''),
+		])
+	}
+
+	function actionEventPayload(action, state, details = {}, eventId) {
+		const payload = {
+			schema: 1,
+			leaseId: String(action.leaseId || ''),
+			eventId,
+			state,
+		}
+		const result = safeActionResult(details.result)
+		if (result !== undefined) payload.result = result
+		const error = scrub(details.errorCode, 80)
+		const message = scrub(details.errorMessage, 1024)
+		if (error) payload.errorCode = error
+		if (message) payload.errorMessage = message
+		return payload
+	}
+
+	async function enqueueActionEvent(actionId, state, details = {}, actionPatch = {}) {
+		if (!TERMINAL_ACTION_STATES.has(state)) throw bridgeError('bridge action 状态无效', 'BRIDGE_INVALID_ACTION')
+		return serial(async () => {
+			const actions = await readActions()
+			const current = actions[actionId]
+			if (!current) return { queued: false, missing: true }
+			const fingerprint = actionEventFingerprint(state, details)
+			if (current.lastEventFingerprint === fingerprint) return { queued: false, duplicate: true }
+			const outbox = await readActionOutbox()
+			const pending = outbox.find(item => item.actionId === actionId
+				&& String(item.payload?.leaseId || '') === String(current.leaseId || '')
+				&& actionEventFingerprint(item.payload?.state, {
+					result: item.payload?.result,
+					errorCode: item.payload?.errorCode,
+					errorMessage: item.payload?.errorMessage,
+				}) === fingerprint)
+			const eventId = pending?.eventId || makeId('action-event')
+			const payload = pending?.payload || actionEventPayload(current, state, details, eventId)
+			if (!pending) outbox.push({
+				eventId,
+				actionId,
+				jobId: current.jobId,
+				payload,
+				createdAt: now(),
+				attempts: 0,
+				nextAttemptAt: 0,
+			})
+			actions[actionId] = {
+				...current,
+				...actionPatch,
+				status: actionPatch.status || state,
+				lastEventFingerprint: fingerprint,
+				updatedAt: now(),
+			}
+			// Keep the receipt and stable event ID in one storage mutation so a
+			// service-worker restart can replay the same acknowledgement.
+			await setStorage({ [ACTIONS_KEY]: actions, [ACTION_OUTBOX_KEY]: outbox })
+			return { queued: true, event: outbox.find(item => item.eventId === eventId) }
+		})
+	}
+
+	async function removeActionOutboxEvent(eventId) {
+		return serial(async () => {
+			const outbox = await readActionOutbox()
+			await writeActionOutbox(outbox.filter(item => item.eventId !== eventId))
+		})
+	}
+
+	async function markActionOutboxAttempt(eventId, error, token = '') {
+		return serial(async () => {
+			const outbox = await readActionOutbox()
+			for (const item of outbox) {
+				if (item.eventId !== eventId) continue
+				item.attempts = Number(item.attempts || 0) + 1
+				item.nextAttemptAt = 0
+				item.lastErrorCode = errorCode(error, 'BRIDGE_ACTION_EVENT_ERROR')
+				item.lastError = scrubWithToken(error?.message, token)
+			}
+			await writeActionOutbox(outbox)
+		})
+	}
+
+	async function flushActionOutbox(config = null) {
+		const bridgeConfig = config || await readConfig()
+		if (!bridgeConfig.token) return false
+		const outbox = await readActionOutbox()
+		if (outbox.length === 0) return true
+		for (const item of outbox.slice().sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0))) {
+			if (Number(item.nextAttemptAt || 0) > now()) continue
+			try {
+				await requestJson(`/v1/actions/${encodeURIComponent(String(item.actionId || ''))}/events`, item.payload, bridgeConfig.token)
+				await removeActionOutboxEvent(item.eventId)
+			} catch (error) {
+				await markActionOutboxAttempt(item.eventId, error, bridgeConfig.token)
+				return false
+			}
+		}
+		return (await readActionOutbox()).length === 0
+	}
+
+	async function markBridgeJobCancelled(action) {
+		const jobs = await readJobs()
+		const current = jobs[action.jobId]
+		if (current?.status === 'cancelled') return current
+		return updateJob(action.jobId, {
+			status: 'cancelled',
+			taskId: action.taskId || current?.taskId || '',
+			remoteId: current?.remoteId || '',
+		})
+	}
+
+	async function executeCancelTaskAction(action) {
+		const tasks = await readTasks()
+		let candidates = action.taskId
+			? tasks.filter(item => taskId(item) === action.taskId)
+			: tasks.filter(item => taskBridgeJobId(item) === action.jobId)
+		// A worker restart can retain the Bridge job receipt even when the local
+		// task was written in a separate storage turn. Use that receipt only as a
+		// task-id mapping; never fall back to a remote hash or a directory scan.
+		if (!action.taskId && candidates.length === 0) {
+			const jobs = await readJobs()
+			const mappedTaskId = taskId(jobs[action.jobId])
+			if (mappedTaskId) candidates = tasks.filter(item => taskId(item) === mappedTaskId)
+		}
+		if (candidates.length > 1) {
+			return { state: 'failed', errorCode: 'TASK_AMBIGUOUS', errorMessage: 'action jobId 对应多个本地任务，未执行取消' }
+		}
+		const task = candidates[0] || null
+		if (task) {
+			const taskJobId = taskBridgeJobId(task)
+			if (taskJobId && taskJobId !== action.jobId) {
+				return {
+					state: 'failed',
+					errorCode: 'TASK_JOB_MISMATCH',
+					errorMessage: 'action jobId 与本地任务不匹配',
+				}
+			}
+		}
+		const serverTerminal = TERMINAL_JOB_STATES.has(action.jobStatus)
+			&& action.jobStatus !== 'claimed'
+		if (!task) {
+			if (serverTerminal) {
+				return {
+					state: 'noop',
+					result: {
+						taskId: action.taskId,
+						scope: 'local',
+						status: action.jobStatus,
+						bridgeJobStatus: action.jobStatus,
+						localTaskFound: false,
+						message: '本地任务不存在，且 Bridge 任务已结束',
+					},
+				}
+			}
+			await markBridgeJobCancelled(action)
+			return {
+				state: 'applied',
+				result: {
+					taskId: action.taskId,
+					scope: 'local',
+					status: 'cancelled',
+					bridgeJobStatus: 'cancelled',
+					localTaskFound: false,
+					message: '本地任务不存在，已停止 Bridge 本地跟踪；115 云端离线任务未取消',
+				},
+			}
+		}
+		if (typeof background.TaskStore?.cancel !== 'function') {
+			return { state: 'failed', errorCode: 'TASK_CANCEL_UNAVAILABLE', errorMessage: '本地任务取消入口不可用' }
+		}
+		const active = ['waiting', 'processing'].includes(task.status)
+		if (active) {
+			const cancelled = await background.TaskStore.cancel(taskId(task), { source: 'bridge' })
+			if (!cancelled || taskId(cancelled) !== taskId(task) || cancelled.status !== 'cancelled') {
+				return { state: 'uncertain', errorCode: 'TASK_CANCEL_UNCERTAIN', errorMessage: '本地任务取消结果无法确认' }
+			}
+		}
+		if (serverTerminal) {
+			return {
+				state: 'noop',
+				result: {
+					taskId: taskId(task),
+					scope: 'local',
+					status: String(task.status || 'unknown'),
+					bridgeJobStatus: action.jobStatus,
+					localTaskFound: true,
+					message: '本地任务已结束，Bridge 任务也已结束',
+				},
+			}
+		}
+		await markBridgeJobCancelled(action)
+		return {
+			state: 'applied',
+			result: {
+				taskId: taskId(task),
+				scope: 'local',
+				status: 'cancelled',
+				bridgeJobStatus: 'cancelled',
+				localTaskFound: true,
+				message: active
+					? '已在本地停止后处理与监控；115 云端离线任务未取消'
+					: '本地任务已无活动后处理，已停止 Bridge 本地跟踪；115 云端离线任务未取消',
+			},
+		}
+	}
+
+	async function executeClaimedAction(action) {
+		if (!action || TERMINAL_ACTION_STATES.has(action.status)) return { skipped: true }
+		await updateAction(action.actionId, { status: 'running' })
+		try {
+			if (action.validationError) {
+				return enqueueActionEvent(action.actionId, 'failed', {
+					errorCode: action.validationError.code,
+					errorMessage: action.validationError.message,
+				}, { status: 'failed' })
+			}
+			if (!ACTION_TYPES.has(action.actionType)) {
+				return enqueueActionEvent(action.actionId, 'failed', {
+					errorCode: 'UNSUPPORTED_ACTION',
+					errorMessage: '不支持的 Bridge action 类型',
+				}, { status: 'failed' })
+			}
+			const outcome = await executeCancelTaskAction(action)
+			return enqueueActionEvent(action.actionId, outcome.state, outcome, { status: outcome.state })
+		} catch (error) {
+			return enqueueActionEvent(action.actionId, 'uncertain', {
+				errorCode: 'ACTION_UNCERTAIN',
+				errorMessage: '本地 action 执行结果无法确认',
+			}, { status: 'uncertain' })
+		}
+	}
+
+	function safeIntent(rawIntent, jobId, defaultCid) {
+		const input = rawIntent?.intent && typeof rawIntent.intent === 'object' ? rawIntent.intent : rawIntent
+		const source = input && typeof input === 'object' && !Array.isArray(input) ? input : null
+		const invalid = () => { throw bridgeError('bridge intent 无效', 'BRIDGE_INVALID_INTENT') }
+		if (!source) return invalid()
+
+		const claimJobId = String(jobId || '').trim()
+		if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(claimJobId)) return invalid()
+
+		if (typeof source.sourceSite !== 'string' || typeof source.mediaType !== 'string' || typeof source.processorProfile !== 'string') return invalid()
+		const sourceSiteRaw = source.sourceSite.trim()
+		const mediaType = source.mediaType.trim()
+		const processorProfile = source.processorProfile.trim()
+		if (!SAFE_SOURCE_SITE.test(sourceSiteRaw) || sourceSiteRaw !== sourceSiteRaw.toLowerCase()) return invalid()
+		if (!INTENT_MEDIA_TYPES.has(mediaType) || !INTENT_PROCESSOR_PROFILES.has(processorProfile)) return invalid()
+
+		if (source.url !== undefined && source.url !== null && typeof source.url !== 'string') return invalid()
+		if (source.magnet !== undefined && source.magnet !== null && typeof source.magnet !== 'string') return invalid()
+		const urlValue = source.url === undefined || source.url === null ? '' : source.url.trim()
+		const magnetValue = source.magnet === undefined || source.magnet === null ? '' : source.magnet.trim()
+		if (urlValue && magnetValue && urlValue !== magnetValue) return invalid()
+		const url = urlValue || magnetValue
+		const intentApi = global.Push115.DownloadIntent
+		if (!intentApi?.parseDownloadLink || !intentApi?.create) return invalid()
+		const parsedLink = intentApi.parseDownloadLink(url)
+		if (!parsedLink) return invalid()
+
+		const rawCid = source.savePathCid
+		const cidMissing = rawCid === undefined || rawCid === null || String(rawCid).trim() === ''
+		const savePathCid = cidMissing
+			? normalizeCid(defaultCid, '0')
+			: String(rawCid).trim()
+		if (!/^\d{1,64}$/.test(savePathCid)) return invalid()
+		if (url.length > 8192) return invalid()
+
+		// DownloadIntent intentionally keeps a broad legacy Magnet parser for
+		// direct extension submissions. The Bridge boundary follows the server
+		// contract and accepts only standard BTIH magnets, plus a strict ED2K wire shape.
+		let strictEd2k = null
+		const legacyBtih = intentApi.extractBtih?.(url) || ''
+		const parsedBtih = /^(?:[A-Za-z2-7]{32}|[A-Fa-f0-9]{40})$/.test(legacyBtih)
+			? legacyBtih.toLowerCase() : ''
+		if (parsedLink.linkType === 'magnet' && !parsedBtih) return invalid()
+		if (parsedLink.linkType === 'ed2k') {
+			const match = url.match(/^ed2k:\/\/\|file\|([^|]*)\|([0-9]+)\|([a-f0-9]{32})\|\/$/i)
+			if (!match) return invalid()
+			let fileName
+			try { fileName = decodeURIComponent(match[1]).trim() } catch (error) { return invalid() }
+			if (!fileName || fileName.length > 1024 || fileName.includes('|') || /[\u0000-\u001f\u007f]/.test(fileName)) return invalid()
+			try {
+				const size = BigInt(match[2])
+				if (size < 0n || size > 9223372036854775807n) return invalid()
+				strictEd2k = {
+					fileName,
+					size: size <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(size) : size.toString(),
+					sizeText: size.toString(),
+					hash: match[3].toLowerCase(),
+				}
+			} catch (error) { return invalid() }
+		}
+
+		const copyText = (value, limit) => {
+			if (value === undefined || value === null || value === '') return ''
+			if (typeof value !== 'string' && typeof value !== 'number') return invalid()
+			const text = String(value).trim()
+			if (text.length > limit) return invalid()
+			return text
+		}
+		const copyNumber = (value, keyName) => {
+			if (value === undefined || value === null || value === '') return undefined
+			const text = String(value)
+			if (/\s/.test(text)) return invalid()
+			if (!/^\d+$/.test(text) || text.length > 24) return invalid()
+			let number
+			try { number = BigInt(text) } catch (error) { return invalid() }
+			if (number > MAX_INT64) return invalid()
+			const canonical = number.toString()
+			return keyName === 'expectedSize' && number <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(canonical) : canonical
+		}
+		const copyHash = (value, keyName) => {
+			const text = copyText(value, 128).toLowerCase()
+			if (!text) return ''
+			const pattern = keyName === 'btih' ? /^(?:[a-z2-7]{32}|[a-f0-9]{40})$/ : /^[a-f0-9]{32,128}$/
+			if (!pattern.test(text)) return invalid()
+			return text
+		}
+
+		const rawMetadata = source.metadata && typeof source.metadata === 'object' && !Array.isArray(source.metadata)
+			? source.metadata : {}
+		const metadata = {}
+		for (const name of BRIDGE_METADATA_KEYS) {
+			if (!Object.prototype.hasOwnProperty.call(rawMetadata, name)) continue
+			const value = rawMetadata[name]
+			if (BRIDGE_METADATA_BOOLEAN_KEYS.has(name)) {
+				if (typeof value !== 'boolean') return invalid()
+				metadata[name] = value
+				continue
+			}
+			if (BRIDGE_METADATA_NUMBER_KEYS.has(name)) {
+				metadata[name] = copyNumber(value, name)
+				continue
+			}
+			if (!BRIDGE_METADATA_TEXT_KEYS.has(name)) continue
+			if (name === 'btih' || name === 'ed2kHash' || name === 'expectedHash') metadata[name] = copyHash(value, name)
+			else metadata[name] = copyText(value, ['fileName', 'ed2kFileName', 'expectedName'].includes(name) ? 1024 : 2048)
+		}
+		if (metadata.linkType && metadata.linkType !== parsedLink.linkType) return invalid()
+		if (metadata.btih && parsedBtih && metadata.btih !== parsedBtih) return invalid()
+
+		const fieldText = (name, limit) => {
+			if (source[name] === undefined || source[name] === null || source[name] === '') return undefined
+			return copyText(source[name], limit)
+		}
+		const rawExpectedSize = copyNumber(source.expectedSize, 'expectedSize')
+		const rawExpectedHash = source.expectedHash === undefined || source.expectedHash === null || source.expectedHash === ''
+			? undefined : copyHash(source.expectedHash, 'expectedHash')
+		if (source.linkType !== undefined && source.linkType !== null && String(source.linkType).trim() !== parsedLink.linkType) return invalid()
+
+		const candidate = {
+			sourceSite: sourceSiteRaw,
+			mediaType,
+			processorProfile,
+			url,
+			jobId: claimJobId,
+			savePathCid,
+			monitorDownload: true,
 			metadata,
 		}
+		for (const [name, limit] of [['title', 512], ['code', 64], ['expectedName', 1024]]) {
+			const value = fieldText(name, limit)
+			if (value !== undefined) candidate[name] = value
+		}
+		if (rawExpectedSize !== undefined) candidate.expectedSize = rawExpectedSize
+		if (rawExpectedHash !== undefined) candidate.expectedHash = rawExpectedHash
+		if (strictEd2k) {
+			if (candidate.expectedName !== undefined && candidate.expectedName !== strictEd2k.fileName) return invalid()
+			if (candidate.expectedSize !== undefined) {
+				try {
+					if (BigInt(String(candidate.expectedSize)) !== BigInt(strictEd2k.sizeText)) return invalid()
+				} catch (error) { return invalid() }
+			}
+			if (candidate.expectedHash !== undefined && candidate.expectedHash !== strictEd2k.hash) return invalid()
+			candidate.expectedName = strictEd2k.fileName
+			candidate.expectedSize = strictEd2k.size
+			candidate.expectedHash = strictEd2k.hash
+		}
+
+		let intent
+		try {
+			intent = intentApi.create(candidate)
+		} catch (error) {
+			return invalid()
+		}
+		if (!intent || intent.sourceSite !== sourceSiteRaw || intent.mediaType !== mediaType || intent.processorProfile !== processorProfile
+			|| intent.linkType !== parsedLink.linkType || intent.savePathCid !== savePathCid) return invalid()
+		const boundedCanonicalText = (value, limit) => typeof value === 'string' && value.length <= limit
+		const sourceTitleProvided = source.title !== undefined && source.title !== null && String(source.title).trim() !== ''
+		if (typeof intent.title !== 'string') return invalid()
+		if (intent.title.length > 512) {
+			if (sourceTitleProvided) return invalid()
+			intent.title = String(intent.expectedName || '').slice(0, 512)
+		}
+		if (!boundedCanonicalText(intent.title, 512)
+			|| !boundedCanonicalText(intent.code, 64)
+			|| !boundedCanonicalText(intent.expectedName, 1024)
+			|| typeof intent.expectedHash !== 'string'
+			|| intent.expectedHash.length > 128
+			|| (intent.expectedHash !== '' && !/^[a-f0-9]{32,128}$/.test(intent.expectedHash))) return invalid()
+		if (intent.expectedSize !== undefined && intent.expectedSize !== null && intent.expectedSize !== '') {
+			const sizeText = String(intent.expectedSize)
+			if (!/^\d+$/.test(sizeText)) return invalid()
+			try {
+				const size = BigInt(sizeText)
+				if (size > MAX_INT64) return invalid()
+				if (size <= BigInt(Number.MAX_SAFE_INTEGER)) {
+					if (typeof intent.expectedSize !== 'number' || !Number.isSafeInteger(intent.expectedSize) || intent.expectedSize !== Number(size)) return invalid()
+				} else if (typeof intent.expectedSize !== 'string' || intent.expectedSize !== size.toString()) return invalid()
+			} catch (error) { return invalid() }
+		}
+		if (strictEd2k) {
+			try {
+				if (intent.expectedName !== strictEd2k.fileName
+					|| BigInt(String(intent.expectedSize)) !== BigInt(strictEd2k.sizeText)
+					|| intent.expectedHash !== strictEd2k.hash) return invalid()
+			} catch (error) { return invalid() }
+		}
+		if (processorProfile === 'jav' && !intent.code) return invalid()
+
+		// Rebuild metadata after canonicalization so untrusted bridge fields cannot
+		// override the parser's link identity or the worker's submission guards.
+		intent.metadata = {
+			...intent.metadata,
+			bridgeJobId: claimJobId,
+			monitorDownload: true,
+			linkType: intent.linkType,
+			expectedName: intent.expectedName,
+			expectedSize: intent.expectedSize,
+			expectedHash: intent.expectedHash,
+		}
+		if (strictEd2k) {
+			intent.metadata.fileName = strictEd2k.fileName
+			intent.metadata.ed2kFileName = strictEd2k.fileName
+			intent.metadata.ed2kSize = strictEd2k.size
+			intent.metadata.ed2kHash = strictEd2k.hash
+		}
+		delete intent.metadata.skipSubmitted
+		delete intent.metadata.animeTarget
+		return intent
 	}
 
 	function taskBridgeJobId(task) {
@@ -385,7 +953,7 @@
 
 	function normalizeClaimStatus(value) {
 		const candidate = String(value || '').trim().toLowerCase()
-		return ['claimed', 'accepted', 'progress', 'completed', 'failed', 'uncertain'].includes(candidate)
+		return ['claimed', 'accepted', 'progress', 'completed', 'failed', 'uncertain', 'cancelled'].includes(candidate)
 			? candidate : 'claimed'
 	}
 
@@ -542,6 +1110,11 @@
 	}
 
 	async function reconcileJobTask(job, task) {
+		if (task?.status === 'cancelled') {
+			// Local cancellation is acknowledged through the action outbox. Never
+			// turn that terminal local state into an ordinary job progress event.
+			return { skipped: true, cancelled: true }
+		}
 		const details = taskDetails(task, job)
 		const currentTaskId = details.taskId || ''
 		const currentRemoteId = details.remoteId || ''
@@ -599,6 +1172,7 @@
 			if (!job?.jobId || TERMINAL_JOB_STATES.has(job.status)) continue
 			const task = findTask(tasks, job)
 			if (task) {
+				if (task.status === 'cancelled') continue
 				await reconcileJobTask(job, task)
 				continue
 			}
@@ -671,6 +1245,10 @@
 		const serverStatus = normalizeClaimStatus(job.serverStatus || job.status)
 		const previouslySubmitted = claimWasPreviouslySubmitted(serverStatus, job.recovered, job.attemptCount)
 		if (existing) {
+			if (existing.status === 'cancelled') {
+				await updateJob(job.jobId, { status: 'cancelled', taskId: taskId(existing) || job.taskId || '' })
+				return { skipped: true, cancelled: true }
+			}
 			// A recovered claim that the bridge already reports as progress or a
 			// terminal state has already crossed the 115 submission boundary.  Mark
 			// accepted as observed before reconciliation so we do not replay it.
@@ -698,7 +1276,7 @@
 			}, { status: 'uncertain' })
 		}
 		if (job.status !== 'claimed') return { skipped: true }
-		const intent = safeIntent(job.intent, job.jobId, bridgeConfig.targetCid)
+		const intent = safeIntent(job.intent, job.jobId, bridgeConfig.defaultCid)
 		await updateJob(job.jobId, { status: 'submitting', intent })
 		let submissionStarted = false
 		try {
@@ -797,6 +1375,33 @@
 		}
 	}
 
+	function claimActionPayload(worker) {
+		return { schema: 1, workerId: worker, leaseSeconds: LEASE_SECONDS }
+	}
+
+	async function claimAction(bridgeConfig) {
+		const result = await requestJson('/v1/actions/claim', claimActionPayload(await workerId()), bridgeConfig.token)
+		return normalizeActionClaim(result)
+	}
+
+	async function processActions(bridgeConfig) {
+		if (!await flushActionOutbox(bridgeConfig)) return { actionOutboxPending: true }
+		const actions = await readActions()
+		const pending = Object.values(actions).find(action => action?.status === 'claimed' || action?.status === 'running')
+		if (pending) {
+			await executeClaimedAction(pending)
+			await flushActionOutbox(bridgeConfig)
+			return { actionId: pending.actionId, actionResumed: true }
+		}
+		const claimed = await claimAction(bridgeConfig)
+		if (!claimed) return { actionEmpty: true }
+		const saved = await persistActionClaim(claimed)
+		if (TERMINAL_ACTION_STATES.has(saved.status)) return { actionId: saved.actionId, actionDuplicate: true }
+		await executeClaimedAction(saved)
+		await flushActionOutbox(bridgeConfig)
+		return { actionId: saved.actionId }
+	}
+
 	async function ensureAlarm() {
 		const bridgeConfig = await readConfig()
 		if (!chrome.alarms?.create) return false
@@ -816,30 +1421,49 @@
 			const bridgeConfig = await readConfig()
 			if (!bridgeConfig.enabled || !bridgeConfig.token) return { disabled: true }
 			if (!await hasPermission()) return { permission: false }
-			await reconcileTasks()
-			if (!await flushOutbox(bridgeConfig)) return { outboxPending: true }
-
-			const jobs = await readJobs()
-			const claimed = Object.values(jobs).find(job => job?.status === 'claimed')
-			if (claimed) {
-				await submitClaimedJob(claimed, bridgeConfig)
-				await flushOutbox(bridgeConfig)
-				return { jobId: claimed.jobId, resumed: true }
+			const result = {}
+			// Action receipts and job receipts use independent durable outboxes. A
+			// failure in one poll must not prevent the other side from progressing.
+			try {
+				Object.assign(result, await processActions(bridgeConfig))
+			} catch (error) {
+				result.actionError = errorCode(error, 'BRIDGE_ACTION_POLL_FAILED')
 			}
-
-			const claimedJob = await claimJob(bridgeConfig)
-			if (!claimedJob) return { empty: true }
-			claimedJob.intent = safeIntent(claimedJob.intent, claimedJob.jobId, bridgeConfig.targetCid)
-			const saved = await persistClaim(claimedJob)
-			if (TERMINAL_JOB_STATES.has(saved.status)) return { jobId: saved.jobId, duplicate: true }
-			await submitClaimedJob(saved, bridgeConfig)
-			await flushOutbox(bridgeConfig)
-			return { jobId: saved.jobId }
-		} catch (error) {
-			// Network/bridge errors remain recoverable through the next alarm.  Do
-			// not log the token or response body; the options page only exposes
-			// persisted task and event state.
-			return { error: errorCode(error, 'BRIDGE_POLL_FAILED') }
+			try {
+				await reconcileTasks()
+				if (!await flushOutbox(bridgeConfig)) {
+					result.outboxPending = true
+				} else {
+					const jobs = await readJobs()
+					const claimed = Object.values(jobs).find(job => job?.status === 'claimed')
+					if (claimed) {
+						await submitClaimedJob(claimed, bridgeConfig)
+						await flushOutbox(bridgeConfig)
+						result.jobId = claimed.jobId
+						result.resumed = true
+					} else {
+						const claimedJob = await claimJob(bridgeConfig)
+						if (!claimedJob) result.empty = true
+						else {
+							claimedJob.intent = safeIntent(claimedJob.intent, claimedJob.jobId, bridgeConfig.defaultCid)
+							const saved = await persistClaim(claimedJob)
+							if (TERMINAL_JOB_STATES.has(saved.status)) {
+								result.jobId = saved.jobId
+								result.duplicate = true
+							} else {
+								await submitClaimedJob(saved, bridgeConfig)
+								await flushOutbox(bridgeConfig)
+								result.jobId = saved.jobId
+							}
+						}
+					}
+				}
+			} catch (error) {
+				// Network/bridge errors remain recoverable through the next alarm. Do
+				// not log the token or response body.
+				result.error = errorCode(error, 'BRIDGE_POLL_FAILED')
+			}
+			return result
 		} finally {
 			running = false
 		}
@@ -851,9 +1475,16 @@
 
 	async function resetRuntime() {
 		return serial(async () => {
-			const [jobs, outbox] = await Promise.all([readJobs(), readOutbox()])
-			await setStorage({ [JOBS_KEY]: {}, [OUTBOX_KEY]: [] })
-			return { jobsCleared: Object.keys(jobs).length, eventsCleared: outbox.length }
+			const [jobs, outbox, actions, actionOutbox] = await Promise.all([
+				readJobs(), readOutbox(), readActions(), readActionOutbox(),
+			])
+			await setStorage({ [JOBS_KEY]: {}, [OUTBOX_KEY]: [], [ACTIONS_KEY]: {}, [ACTION_OUTBOX_KEY]: [] })
+			return {
+				jobsCleared: Object.keys(jobs).length,
+				eventsCleared: outbox.length,
+				actionsCleared: Object.keys(actions).length,
+				actionEventsCleared: actionOutbox.length,
+			}
 		})
 	}
 
@@ -869,11 +1500,17 @@
 		readConfig,
 		readJobs,
 		readOutbox,
+		readActions,
+		readActionOutbox,
 		requestJson,
 		claimJob,
+		claimAction,
 		flushOutbox,
+		flushActionOutbox,
 		reconcileTasks,
 		enqueueEvent,
+		executeClaimedAction,
+		processActions,
 		ensureAlarm,
 		syncConfig,
 		processPending,

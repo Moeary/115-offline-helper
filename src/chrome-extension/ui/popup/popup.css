@@ -330,6 +330,10 @@ body {
   color: #248a3d;
 }
 
+.push115-task-item.cancelled .push115-task-status {
+  color: #8a6d1d;
+}
+
 body.dark-theme .push115-task-item {
   border-color: rgba(255, 255, 255, 0.1);
   background: #333;
@@ -400,6 +404,10 @@ body.dark-theme .push115-task-item {
 
 .push115-task-manager-item.completed .push115-task-manager-status {
   color: #248a3d;
+}
+
+.push115-task-manager-item.cancelled .push115-task-manager-status {
+  color: #8a6d1d;
 }
 
 .push115-task-manager-meta {

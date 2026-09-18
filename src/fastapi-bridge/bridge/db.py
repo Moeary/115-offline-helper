@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 import sqlite3
 import threading
 import time
@@ -21,6 +23,10 @@ class UnknownJob(QueueError):
     pass
 
 
+class UnknownAction(QueueError):
+    pass
+
+
 class LeaseConflict(QueueError):
     pass
 
@@ -29,7 +35,9 @@ class StateConflict(QueueError):
     pass
 
 
-TERMINAL_STATES = frozenset({"completed", "failed", "uncertain"})
+TERMINAL_STATES = frozenset({"completed", "failed", "uncertain", "cancelled"})
+JOB_TERMINAL_STATES = TERMINAL_STATES
+ACTION_TERMINAL_STATES = frozenset({"applied", "failed", "uncertain", "noop"})
 STATE_TRANSITIONS = {
     # A browser can finish a very fast 115 submission before it has flushed
     # an explicit accepted event.  The event still carries the same lease and
@@ -49,6 +57,59 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
+def _validate_action_result(value: Any) -> dict[str, Any]:
+    """Validate action result JSON before it reaches the durable store."""
+
+    if not isinstance(value, dict):
+        raise ValueError("action.result 必须是 JSON 对象")
+    max_depth = 6
+    max_nodes = 200
+    max_string = 4096
+    max_bytes = 256 * 1024
+    count = 0
+
+    def visit(item: Any, depth: int) -> Any:
+        nonlocal count
+        count += 1
+        if count > max_nodes:
+            raise ValueError("action.result 项目数量超出限制")
+        if depth > max_depth:
+            raise ValueError("action.result 嵌套深度超出限制")
+        if isinstance(item, str):
+            if len(item) > max_string:
+                raise ValueError("action.result 字符串过长")
+            return item
+        if item is None or isinstance(item, (bool, int)):
+            return item
+        if isinstance(item, float):
+            if not math.isfinite(item):
+                raise ValueError("action.result 不得包含非有限浮点数")
+            return item
+        if isinstance(item, list):
+            if len(item) > max_nodes:
+                raise ValueError("action.result 数组过长")
+            return [visit(child, depth + 1) for child in item]
+        if isinstance(item, dict):
+            if len(item) > max_nodes:
+                raise ValueError("action.result 对象过大")
+            result: dict[str, Any] = {}
+            for key, child in item.items():
+                if not isinstance(key, str) or len(key) > 128:
+                    raise ValueError("action.result 键无效")
+                result[key] = visit(child, depth + 1)
+            return result
+        raise ValueError("action.result 只能包含 JSON 值")
+
+    normalized = visit(value, 0)
+    try:
+        encoded = _json(normalized).encode("utf-8")
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("action.result 不是有效 JSON") from None
+    if len(encoded) > max_bytes:
+        raise ValueError("action.result 过大")
+    return normalized
+
+
 def _now() -> float:
     return time.time()
 
@@ -60,6 +121,8 @@ def _token_hash(value: str) -> str:
 @dataclass(frozen=True)
 class JobRecord:
     job_id: str
+    parent_job_id: str | None
+    retry_count: int
     lease_id: str | None
     intent: dict[str, Any]
     status: str
@@ -93,6 +156,8 @@ class JobRecord:
             "status": self.status,
             "recovered": self.status != "claimed" or self.attempt_count > 1,
             "attemptCount": self.attempt_count,
+            "retryCount": self.retry_count,
+            "parentJobId": self.parent_job_id,
             "taskId": self.task_id,
             "remoteId": self.remote_id,
         }
@@ -100,6 +165,8 @@ class JobRecord:
     def internal_payload(self) -> dict[str, Any]:
         return {
             "jobId": self.job_id,
+            "parentJobId": self.parent_job_id,
+            "retryCount": self.retry_count,
             "status": self.status,
             "intent": self.intent,
             "taskId": self.task_id,
@@ -113,6 +180,41 @@ class JobRecord:
             "telegramMessageId": self.telegram_message_id,
             "statusMessageId": self.status_message_id,
             "candidateKey": self.candidate_key,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+        }
+
+
+@dataclass(frozen=True)
+class ActionRecord:
+    action_id: str
+    job_id: str
+    action_type: str
+    status: str
+    request_id: str
+    payload: dict[str, Any]
+    lease_id: str | None
+    worker_id: str | None
+    lease_until: float | None
+    attempt_count: int
+    result: dict[str, Any] | None
+    error_code: str | None
+    error_message: str | None
+    created_at: float
+    updated_at: float
+
+    def claim_payload(self) -> dict[str, Any]:
+        return {
+            "actionId": self.action_id,
+            "jobId": self.job_id,
+            "actionType": self.action_type,
+            "type": self.action_type,
+            "status": self.status,
+            "requestId": self.request_id,
+            "payload": self.payload,
+            "leaseId": self.lease_id or "",
+            "recovered": self.attempt_count > 1,
+            "attemptCount": self.attempt_count,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
@@ -156,15 +258,113 @@ class QueueStore:
 
     def initialize(self) -> None:
         with self._lock:
-            self._connection.executescript(
+            version_row = self._connection.execute("PRAGMA user_version").fetchone()
+            version = int(version_row[0] if version_row else 0)
+            jobs_row = self._connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'"
+            ).fetchone()
+            if jobs_row is None:
+                self._create_schema()
+            elif version < 2 or not self._jobs_support_v2(str(jobs_row[0] or "")):
+                self._migrate_to_v2()
+            else:
+                self._create_auxiliary_schema()
+            self._connection.execute("PRAGMA user_version = 2")
+
+    def _jobs_support_v2(self, sql: str) -> bool:
+        columns = {
+            str(row[1])
+            for row in self._connection.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        return "'cancelled'" in sql.lower() and {
+            "parent_job_id",
+            "retry_count",
+        }.issubset(columns)
+
+    def _create_schema(self) -> None:
+        self._connection.executescript(
+            """
+            CREATE TABLE jobs (
+                job_id TEXT PRIMARY KEY,
+                parent_job_id TEXT REFERENCES jobs(job_id),
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                intent_json TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN (
+                        'queued', 'claimed', 'accepted', 'progress',
+                        'completed', 'failed', 'uncertain', 'cancelled'
+                    )
+                ),
+                worker_id TEXT,
+                lease_id TEXT,
+                lease_until REAL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                task_id TEXT,
+                remote_id TEXT,
+                percent REAL,
+                message TEXT,
+                error_code TEXT,
+                error_message TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                telegram_chat_id INTEGER,
+                telegram_user_id INTEGER,
+                telegram_message_id INTEGER,
+                status_message_id INTEGER,
+                candidate_key TEXT,
+                last_notified_state TEXT,
+                last_notified_percent REAL
+            );
+            """
+        )
+        self._create_auxiliary_schema()
+
+    def _migrate_to_v2(self) -> None:
+        """Rebuild the v1 jobs CHECK constraint without losing queue rows."""
+
+        old_columns = {
+            str(row[1])
+            for row in self._connection.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        columns = [
+            "job_id", "parent_job_id", "retry_count", "intent_json", "status",
+            "worker_id", "lease_id", "lease_until", "attempt_count", "task_id",
+            "remote_id", "percent", "message", "error_code", "error_message",
+            "created_at", "updated_at", "telegram_chat_id", "telegram_user_id",
+            "telegram_message_id", "status_message_id", "candidate_key",
+            "last_notified_state", "last_notified_percent",
+        ]
+        # The released v1 schema had every column listed above except the
+        # retry lineage fields.  Keep the migration tolerant of older local
+        # databases that predate one of the nullable/attempt fields as well;
+        # a missing value must still satisfy v2's NOT NULL constraints.
+        defaults = {
+            "parent_job_id": "NULL",
+            "retry_count": "0",
+            "attempt_count": "0",
+            "intent_json": "'{}'",
+            "status": "'queued'",
+            "created_at": "0",
+            "updated_at": "0",
+        }
+        expressions = [
+            column if column in old_columns else defaults.get(column, "NULL")
+            for column in columns
+        ]
+        self._connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS jobs (
+                CREATE TABLE jobs_v2 (
                     job_id TEXT PRIMARY KEY,
+                    parent_job_id TEXT REFERENCES jobs_v2(job_id),
+                    retry_count INTEGER NOT NULL DEFAULT 0,
                     intent_json TEXT NOT NULL,
                     status TEXT NOT NULL CHECK (
                         status IN (
                             'queued', 'claimed', 'accepted', 'progress',
-                            'completed', 'failed', 'uncertain'
+                            'completed', 'failed', 'uncertain', 'cancelled'
                         )
                     ),
                     worker_id TEXT,
@@ -186,49 +386,139 @@ class QueueStore:
                     candidate_key TEXT,
                     last_notified_state TEXT,
                     last_notified_percent REAL
-                );
-
-                CREATE INDEX IF NOT EXISTS jobs_claim_idx
-                    ON jobs(status, lease_until, created_at);
-                CREATE INDEX IF NOT EXISTS jobs_telegram_idx
-                    ON jobs(telegram_chat_id, candidate_key, created_at);
-
-                CREATE TABLE IF NOT EXISTS job_events (
-                    event_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
-                    event_id TEXT NOT NULL,
-                    lease_id TEXT NOT NULL,
-                    state TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    UNIQUE(job_id, event_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS callback_tokens (
-                    token_hash TEXT PRIMARY KEY,
-                    chat_id INTEGER NOT NULL,
-                    user_id INTEGER NOT NULL,
-                    message_id INTEGER NOT NULL,
-                    candidate_json TEXT NOT NULL,
-                    expires_at REAL NOT NULL,
-                    used_at REAL
-                );
-                CREATE INDEX IF NOT EXISTS callback_expiry_idx
-                    ON callback_tokens(expires_at, used_at);
-
-                CREATE TABLE IF NOT EXISTS bridge_state (
-                    state_key TEXT PRIMARY KEY,
-                    state_value TEXT NOT NULL,
-                    updated_at REAL NOT NULL
-                );
+                )
                 """
             )
+            self._connection.execute(
+                f"INSERT INTO jobs_v2 ({', '.join(columns)}) "
+                f"SELECT {', '.join(expressions)} FROM jobs"
+            )
+            self._connection.execute("DROP TABLE jobs")
+            self._connection.execute("ALTER TABLE jobs_v2 RENAME TO jobs")
+            self._connection.execute("COMMIT")
+        except Exception:
+            self._connection.execute("ROLLBACK")
+            raise
+        finally:
+            self._connection.execute("PRAGMA foreign_keys = ON")
+        self._create_auxiliary_schema()
+
+    def _create_auxiliary_schema(self) -> None:
+        self._connection.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS jobs_claim_idx
+                ON jobs(status, lease_until, created_at, job_id);
+            CREATE INDEX IF NOT EXISTS jobs_telegram_idx
+                ON jobs(telegram_chat_id, telegram_user_id, candidate_key, created_at);
+            CREATE INDEX IF NOT EXISTS jobs_telegram_page_idx
+                ON jobs(telegram_chat_id, telegram_user_id, created_at DESC, job_id DESC);
+
+            CREATE TABLE IF NOT EXISTS job_events (
+                event_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                event_id TEXT NOT NULL,
+                lease_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(job_id, event_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS callback_tokens (
+                token_hash TEXT PRIMARY KEY,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                candidate_json TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                used_at REAL
+            );
+            CREATE INDEX IF NOT EXISTS callback_expiry_idx
+                ON callback_tokens(expires_at, used_at);
+
+            CREATE TABLE IF NOT EXISTS bridge_state (
+                state_key TEXT PRIMARY KEY,
+                state_value TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS telegram_preferences (
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                last_save_path_cid TEXT,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(chat_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS retry_requests (
+                request_id TEXT PRIMARY KEY,
+                source_job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                new_job_id TEXT NOT NULL UNIQUE REFERENCES jobs(job_id) ON DELETE CASCADE,
+                created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS actions (
+                action_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                action_type TEXT NOT NULL CHECK (action_type IN ('cancel_task')),
+                status TEXT NOT NULL CHECK (
+                    status IN ('queued', 'claimed', 'applied', 'failed', 'uncertain', 'noop')
+                ),
+                request_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                worker_id TEXT,
+                lease_id TEXT,
+                lease_until REAL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                result_json TEXT,
+                error_code TEXT,
+                error_message TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(job_id, action_type, request_id)
+            );
+            CREATE INDEX IF NOT EXISTS actions_claim_idx
+                ON actions(status, lease_until, created_at, action_id);
+            CREATE INDEX IF NOT EXISTS actions_job_idx
+                ON actions(job_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS action_events (
+                event_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_id TEXT NOT NULL REFERENCES actions(action_id) ON DELETE CASCADE,
+                event_id TEXT NOT NULL,
+                lease_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(action_id, event_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS action_requests (
+                request_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                action_id TEXT NOT NULL REFERENCES actions(action_id) ON DELETE CASCADE,
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS action_requests_action_idx
+                ON action_requests(action_id);
+
+            -- Keep idempotency for actions created before this mapping table
+            -- existed.  A malformed legacy database with duplicate request
+            -- IDs keeps its first durable association.
+            INSERT OR IGNORE INTO action_requests(request_id, job_id, action_id, created_at)
+                SELECT request_id, job_id, action_id, created_at FROM actions;
+            """
+        )
 
     def _row_to_job(self, row: sqlite3.Row | None) -> JobRecord | None:
         if row is None:
             return None
         return JobRecord(
             job_id=str(row["job_id"]),
+            parent_job_id=(
+                str(row["parent_job_id"]) if row["parent_job_id"] else None
+            ),
+            retry_count=int(row["retry_count"] or 0),
             lease_id=str(row["lease_id"]) if row["lease_id"] else None,
             intent=json.loads(row["intent_json"]),
             status=str(row["status"]),
@@ -276,15 +566,76 @@ class QueueStore:
             ),
         )
 
+    def _row_to_action(self, row: sqlite3.Row | None) -> ActionRecord | None:
+        if row is None:
+            return None
+        return ActionRecord(
+            action_id=str(row["action_id"]),
+            job_id=str(row["job_id"]),
+            action_type=str(row["action_type"]),
+            status=str(row["status"]),
+            request_id=str(row["request_id"]),
+            payload=json.loads(row["payload_json"] or "{}"),
+            lease_id=str(row["lease_id"]) if row["lease_id"] else None,
+            worker_id=str(row["worker_id"]) if row["worker_id"] else None,
+            lease_until=(
+                float(row["lease_until"]) if row["lease_until"] is not None else None
+            ),
+            attempt_count=int(row["attempt_count"] or 0),
+            result=json.loads(row["result_json"]) if row["result_json"] else None,
+            error_code=str(row["error_code"]) if row["error_code"] else None,
+            error_message=(
+                str(row["error_message"]) if row["error_message"] else None
+            ),
+            created_at=float(row["created_at"]),
+            updated_at=float(row["updated_at"]),
+        )
+
     def _get_job_locked(self, job_id: str) -> JobRecord | None:
         row = self._connection.execute(
             "SELECT * FROM jobs WHERE job_id = ?", (job_id,)
         ).fetchone()
         return self._row_to_job(row)
 
+    def _get_action_locked(self, action_id: str) -> ActionRecord | None:
+        row = self._connection.execute(
+            "SELECT * FROM actions WHERE action_id = ?", (action_id,)
+        ).fetchone()
+        return self._row_to_action(row)
+
+    def _get_action_request_locked(self, request_id: str) -> sqlite3.Row | None:
+        return self._connection.execute(
+            "SELECT * FROM action_requests WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()
+
     def get_job(self, job_id: str) -> JobRecord | None:
         with self._lock:
             return self._get_job_locked(str(job_id))
+
+    def get_telegram_job(
+        self,
+        job_id: str,
+        chat_id: int,
+        user_id: int,
+    ) -> JobRecord | None:
+        """Return a job only when it belongs to the requesting Telegram user."""
+
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE job_id = ?
+                  AND telegram_chat_id = ?
+                  AND telegram_user_id = ?
+                """,
+                (str(job_id).strip(), int(chat_id), int(user_id)),
+            ).fetchone()
+            return self._row_to_job(row)
+
+    def get_action(self, action_id: str) -> ActionRecord | None:
+        with self._lock:
+            return self._get_action_locked(str(action_id))
 
     def list_jobs(
         self,
@@ -307,7 +658,9 @@ class QueueStore:
         if telegram_only:
             clauses.append("telegram_chat_id IS NOT NULL")
         if not include_terminal:
-            clauses.append("status NOT IN ('completed', 'failed', 'uncertain')")
+            clauses.append(
+                "status NOT IN ('completed', 'failed', 'uncertain', 'cancelled')"
+            )
         if changed_only:
             clauses.append(
                 "(status_message_id IS NULL OR last_notified_state IS NULL "
@@ -329,6 +682,112 @@ class QueueStore:
                 (*parameters, bounded_limit),
             ).fetchall()
             return [record for row in rows if (record := self._row_to_job(row))]
+
+    def list_jobs_page(
+        self,
+        *,
+        statuses: tuple[str, ...] = (),
+        limit: int = 100,
+        cursor: tuple[float, str] | None = None,
+    ) -> tuple[list[JobRecord], tuple[float, str] | None]:
+        bounded_limit = max(1, min(int(limit), 100))
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        allowed = set(JOB_TERMINAL_STATES) | {
+            "queued", "claimed", "accepted", "progress"
+        }
+        selected = tuple(dict.fromkeys(str(value).strip().lower() for value in statuses if value))
+        if selected:
+            if any(value not in allowed for value in selected):
+                raise ValueError("未知任务状态")
+            clauses.append(f"status IN ({','.join('?' for _ in selected)})")
+            parameters.extend(selected)
+        if cursor is not None:
+            try:
+                cursor_created_at = float(cursor[0])
+                cursor_job_id = str(cursor[1]).strip()
+            except (TypeError, ValueError, IndexError, OverflowError):
+                raise ValueError("任务游标无效") from None
+            if (
+                not cursor_job_id
+                or len(cursor_job_id) > 128
+                or not math.isfinite(cursor_created_at)
+            ):
+                raise ValueError("任务游标无效")
+            clauses.append("(created_at > ? OR (created_at = ? AND job_id > ?))")
+            parameters.extend((cursor_created_at, cursor_created_at, cursor_job_id))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT * FROM jobs
+                {where}
+                ORDER BY created_at ASC, job_id ASC
+                LIMIT ?
+                """,
+                (*parameters, bounded_limit + 1),
+            ).fetchall()
+            records = [record for row in rows if (record := self._row_to_job(row))]
+            next_cursor = None
+            if len(records) > bounded_limit:
+                records = records[:bounded_limit]
+                last = records[-1]
+                next_cursor = (last.created_at, last.job_id)
+            return records, next_cursor
+
+    def list_telegram_jobs_page(
+        self,
+        chat_id: int,
+        user_id: int,
+        limit: int = 10,
+        cursor: tuple[float, str] | None = None,
+    ) -> tuple[list[JobRecord], tuple[float, str] | None]:
+        """Return one user's Telegram jobs, newest first, using a keyset cursor."""
+
+        bounded_limit = max(1, min(int(limit), 100))
+        parameters: list[Any] = [int(chat_id), int(user_id)]
+        clauses = ["telegram_chat_id = ?", "telegram_user_id = ?"]
+        if cursor is not None:
+            try:
+                created_at = float(cursor[0])
+                job_id = str(cursor[1]).strip()
+            except (TypeError, ValueError, IndexError):
+                raise ValueError("Telegram 任务游标无效") from None
+            if not job_id or len(job_id) > 128 or not math.isfinite(created_at):
+                raise ValueError("Telegram 任务游标无效")
+            clauses.append("(created_at < ? OR (created_at = ? AND job_id < ?))")
+            parameters.extend((created_at, created_at, job_id))
+        where = " AND ".join(clauses)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT * FROM jobs
+                WHERE {where}
+                ORDER BY created_at DESC, job_id DESC
+                LIMIT ?
+                """,
+                (*parameters, bounded_limit + 1),
+            ).fetchall()
+            records = [record for row in rows if (record := self._row_to_job(row))]
+            next_cursor = None
+            if len(records) > bounded_limit:
+                records = records[:bounded_limit]
+                last = records[-1]
+                next_cursor = (last.created_at, last.job_id)
+            return records, next_cursor
+
+    def pending_action(self, job_id: str) -> ActionRecord | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT * FROM actions
+                WHERE job_id = ? AND status IN ('queued', 'claimed')
+                ORDER BY created_at ASC, action_id ASC
+                LIMIT 1
+                """,
+                (str(job_id),),
+            ).fetchone()
+            return self._row_to_action(row)
 
     def enqueue(
         self,
@@ -356,12 +815,13 @@ class QueueStore:
                     """
                     SELECT * FROM jobs
                     WHERE telegram_chat_id = ?
+                      AND telegram_user_id = ?
                       AND candidate_key = ?
-                      AND status <> 'failed'
+                      AND status NOT IN ('failed', 'cancelled')
                     ORDER BY created_at DESC
                     LIMIT 1
                     """,
-                    (int(telegram_chat_id), candidate_key),
+                    (int(telegram_chat_id), int(telegram_user_id), candidate_key),
                 ).fetchone()
                 existing = self._row_to_job(existing_row)
                 if existing:
@@ -392,6 +852,387 @@ class QueueStore:
                 self._connection.execute("COMMIT")
                 assert record is not None
                 return record, True
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+
+    def clone_retry(
+        self,
+        job_id: str,
+        *,
+        request_id: str,
+        now: float | None = None,
+    ) -> tuple[JobRecord, bool]:
+        """Clone one explicitly failed job without mutating its history."""
+
+        job_id = str(job_id).strip()
+        request_id = str(request_id).strip()
+        if not job_id or not request_id:
+            raise ValueError("jobId、requestId 不能为空")
+        now = _now() if now is None else float(now)
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                previous = self._connection.execute(
+                    "SELECT * FROM retry_requests WHERE request_id = ?",
+                    (request_id,),
+                ).fetchone()
+                if previous is not None:
+                    if str(previous["source_job_id"]) != job_id:
+                        raise StateConflict("requestId 已用于另一项任务")
+                    record = self._get_job_locked(str(previous["new_job_id"]))
+                    if record is None:
+                        raise StateConflict("重试请求记录无效")
+                    self._connection.execute("COMMIT")
+                    return record, True
+
+                source = self._get_job_locked(job_id)
+                if source is None:
+                    raise UnknownJob("找不到 bridge job")
+                if source.status != "failed":
+                    raise StateConflict("只有 failed 任务可以重试")
+                new_job_id = str(uuid.uuid4())
+                intent = dict(source.intent)
+                intent["jobId"] = new_job_id
+                self._connection.execute(
+                    """
+                    INSERT INTO jobs (
+                        job_id, parent_job_id, retry_count, intent_json, status,
+                        attempt_count, created_at, updated_at,
+                        telegram_chat_id, telegram_user_id, telegram_message_id,
+                        candidate_key
+                    ) VALUES (?, ?, ?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_job_id,
+                        source.job_id,
+                        source.retry_count + 1,
+                        _json(intent),
+                        now,
+                        now,
+                        source.telegram_chat_id,
+                        source.telegram_user_id,
+                        source.telegram_message_id,
+                        source.candidate_key,
+                    ),
+                )
+                self._connection.execute(
+                    """
+                    INSERT INTO retry_requests(request_id, source_job_id, new_job_id, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (request_id, source.job_id, new_job_id, now),
+                )
+                record = self._get_job_locked(new_job_id)
+                self._connection.execute("COMMIT")
+                assert record is not None
+                return record, False
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+
+    def request_cancel(
+        self,
+        job_id: str,
+        *,
+        request_id: str,
+        reason: str = "",
+        now: float | None = None,
+    ) -> tuple[ActionRecord, bool]:
+        """Create an auditable cancel action, or apply it to queued work."""
+
+        job_id = str(job_id).strip()
+        request_id = str(request_id).strip()
+        if not job_id or not request_id:
+            raise ValueError("jobId、requestId 不能为空")
+        now = _now() if now is None else float(now)
+        payload = {"reason": str(reason or "").strip()}
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                job = self._get_job_locked(job_id)
+                if job is None:
+                    raise UnknownJob("找不到 bridge job")
+                request_row = self._get_action_request_locked(request_id)
+                if request_row is not None:
+                    if str(request_row["job_id"]) != job_id:
+                        raise StateConflict("requestId 已用于另一项动作")
+                    mapped = self._get_action_locked(str(request_row["action_id"]))
+                    if mapped is None:
+                        raise StateConflict("动作请求记录无效")
+                    self._connection.execute("COMMIT")
+                    return mapped, True
+                existing_row = self._connection.execute(
+                    """
+                    SELECT * FROM actions
+                    WHERE job_id = ? AND action_type = 'cancel_task' AND request_id = ?
+                    """,
+                    (job_id, request_id),
+                ).fetchone()
+                if existing_row is not None:
+                    existing = self._row_to_action(existing_row)
+                    self._connection.execute(
+                        """
+                        INSERT OR IGNORE INTO action_requests(
+                            request_id, job_id, action_id, created_at
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (request_id, job_id, existing.action_id, now),
+                    )
+                    self._connection.execute("COMMIT")
+                    assert existing is not None
+                    return existing, True
+                if job.status in JOB_TERMINAL_STATES:
+                    raise StateConflict("终态任务不可取消")
+                pending_row = self._connection.execute(
+                    """
+                    SELECT * FROM actions
+                    WHERE job_id = ? AND action_type = 'cancel_task'
+                      AND status IN ('queued', 'claimed')
+                    ORDER BY created_at ASC, action_id ASC
+                    LIMIT 1
+                    """,
+                    (job_id,),
+                ).fetchone()
+                if pending_row is not None:
+                    pending = self._row_to_action(pending_row)
+                    self._connection.execute(
+                        """
+                        INSERT INTO action_requests(
+                            request_id, job_id, action_id, created_at
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (request_id, job_id, pending_row["action_id"], now),
+                    )
+                    self._connection.execute("COMMIT")
+                    assert pending is not None
+                    # Reuse one in-flight cancel so a second browser click
+                    # cannot leave an orphaned action after the first ACK
+                    # clears the job's worker lease.
+                    return pending, True
+                action_id = str(uuid.uuid4())
+                action_status = "applied" if job.status == "queued" else "queued"
+                self._connection.execute(
+                    """
+                    INSERT INTO actions (
+                        action_id, job_id, action_type, status, request_id,
+                        payload_json, result_json, created_at, updated_at
+                    ) VALUES (?, ?, 'cancel_task', ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        action_id,
+                        job_id,
+                        action_status,
+                        request_id,
+                        _json(payload),
+                        _json({"status": "cancelled"}) if action_status == "applied" else None,
+                        now,
+                        now,
+                    ),
+                )
+                if action_status == "applied":
+                    self._connection.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'cancelled', worker_id = NULL, lease_id = NULL,
+                            lease_until = NULL, updated_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (now, job_id),
+                    )
+                    event_id = f"system-{action_id}"
+                    event_payload = {
+                        "schema": 1,
+                        "leaseId": "system",
+                        "eventId": event_id,
+                        "state": "applied",
+                        "result": {"status": "cancelled"},
+                    }
+                    self._connection.execute(
+                        """
+                        INSERT INTO action_events(
+                            action_id, event_id, lease_id, state, payload_json, created_at
+                        ) VALUES (?, ?, 'system', 'applied', ?, ?)
+                        """,
+                        (action_id, event_id, _json(event_payload), now),
+                    )
+                self._connection.execute(
+                    """
+                    INSERT INTO action_requests(
+                        request_id, job_id, action_id, created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (request_id, job_id, action_id, now),
+                )
+                action = self._get_action_locked(action_id)
+                self._connection.execute("COMMIT")
+                assert action is not None
+                return action, False
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+
+    def claim_action(
+        self,
+        worker_id: str,
+        *,
+        lease_seconds: int | None = None,
+        now: float | None = None,
+    ) -> ActionRecord | None:
+        worker_id = str(worker_id).strip()
+        if not worker_id:
+            raise ValueError("worker_id 不能为空")
+        seconds = self.default_lease_seconds if lease_seconds is None else int(lease_seconds)
+        if not 15 <= seconds <= 900:
+            raise ValueError("lease_seconds 必须在 15 到 900 秒之间")
+        now = _now() if now is None else float(now)
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._connection.execute(
+                    """
+                    SELECT actions.*
+                    FROM actions
+                    JOIN jobs ON jobs.job_id = actions.job_id
+                    WHERE jobs.worker_id IS NOT NULL AND jobs.worker_id <> ''
+                      AND (
+                          (actions.status = 'queued' AND jobs.worker_id = ?)
+                          OR (
+                              actions.status = 'claimed' AND actions.worker_id = ?
+                              AND actions.lease_until IS NOT NULL
+                              AND actions.lease_until <= ?
+                          )
+                      )
+                    ORDER BY actions.created_at ASC, actions.action_id ASC
+                    LIMIT 1
+                    """,
+                    (worker_id, worker_id, now),
+                ).fetchone()
+                if row is None:
+                    self._connection.execute("COMMIT")
+                    return None
+                old_lease = str(row["lease_id"]) if row["lease_id"] else None
+                lease_id = old_lease or str(uuid.uuid4())
+                self._connection.execute(
+                    """
+                    UPDATE actions
+                    SET status = 'claimed', worker_id = ?, lease_id = ?,
+                        lease_until = ?, attempt_count = attempt_count + 1,
+                        updated_at = ?
+                    WHERE action_id = ?
+                    """,
+                    (worker_id, lease_id, now + seconds, now, str(row["action_id"])),
+                )
+                action = self._get_action_locked(str(row["action_id"]))
+                self._connection.execute("COMMIT")
+                assert action is not None
+                return action
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+
+    def append_action_event(
+        self,
+        action_id: str,
+        *,
+        lease_id: str,
+        event_id: str,
+        state: str,
+        result: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        now: float | None = None,
+    ) -> tuple[ActionRecord, bool]:
+        action_id = str(action_id).strip()
+        lease_id = str(lease_id).strip()
+        event_id = str(event_id).strip()
+        state = str(state).strip().lower()
+        if not action_id or not lease_id or not event_id:
+            raise ValueError("actionId、leaseId、eventId 不能为空")
+        if state not in ACTION_TERMINAL_STATES:
+            raise ValueError("未知动作状态")
+        now = _now() if now is None else float(now)
+        result_payload = _validate_action_result(
+            {} if result is None else dict(result)
+        )
+        payload = {
+            "schema": 1,
+            "leaseId": lease_id,
+            "eventId": event_id,
+            "state": state,
+            "result": result_payload,
+            "errorCode": error_code,
+            "errorMessage": error_message,
+        }
+        payload_json = _json(payload)
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                action = self._get_action_locked(action_id)
+                if action is None:
+                    raise UnknownAction("找不到 bridge action")
+                duplicate = self._connection.execute(
+                    "SELECT payload_json FROM action_events WHERE action_id = ? AND event_id = ?",
+                    (action_id, event_id),
+                ).fetchone()
+                if duplicate is not None:
+                    if str(duplicate["payload_json"]) != payload_json:
+                        raise StateConflict("eventId 已用于另一份动作事件")
+                    self._connection.execute("COMMIT")
+                    return action, True
+                if action.lease_id != lease_id:
+                    raise LeaseConflict("动作租约无效")
+                if action.status in ACTION_TERMINAL_STATES:
+                    raise StateConflict("动作已结束")
+                if action.status != "claimed":
+                    raise StateConflict("动作尚未领取")
+                if state == "applied" and action.action_type == "cancel_task":
+                    job = self._get_job_locked(action.job_id)
+                    if job is None:
+                        raise UnknownJob("找不到 bridge job")
+                    if job.status in {"queued", "claimed", "accepted", "progress"}:
+                        self._connection.execute(
+                            """
+                            UPDATE jobs
+                            SET status = 'cancelled', worker_id = NULL, lease_id = NULL,
+                                lease_until = NULL, updated_at = ?
+                            WHERE job_id = ?
+                            """,
+                            (now, action.job_id),
+                        )
+                    # A cancel request can race the final job event.  The
+                    # browser has already attempted the local stop, so its
+                    # durable ACK must still close the action even when the
+                    # job became completed/failed/uncertain first.  Preserve
+                    # that terminal job state and record the action outcome.
+                self._connection.execute(
+                    """
+                    UPDATE actions
+                    SET status = ?, lease_until = NULL, result_json = ?,
+                        error_code = ?, error_message = ?, updated_at = ?
+                    WHERE action_id = ?
+                    """,
+                    (
+                        state,
+                        _json(result_payload),
+                        error_code,
+                        error_message,
+                        now,
+                        action_id,
+                    ),
+                )
+                self._connection.execute(
+                    """
+                    INSERT INTO action_events(
+                        action_id, event_id, lease_id, state, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (action_id, event_id, lease_id, state, payload_json, now),
+                )
+                current = self._get_action_locked(action_id)
+                self._connection.execute("COMMIT")
+                assert current is not None
+                return current, False
             except Exception:
                 self._connection.execute("ROLLBACK")
                 raise
@@ -447,12 +1288,13 @@ class QueueStore:
                     """
                     SELECT * FROM jobs
                     WHERE telegram_chat_id = ?
+                      AND telegram_user_id = ?
                       AND candidate_key = ?
-                      AND status <> 'failed'
+                      AND status NOT IN ('failed', 'cancelled')
                     ORDER BY created_at DESC
                     LIMIT 1
                     """,
-                    (int(chat_id), candidate_key),
+                    (int(chat_id), int(user_id), candidate_key),
                 ).fetchone()
                 existing = self._row_to_job(existing_row)
                 if existing is not None:
@@ -642,7 +1484,7 @@ class QueueStore:
 
                 if job.lease_id != lease_id:
                     raise LeaseConflict("租约无效或已由同一 worker 更新")
-                if job.status in TERMINAL_STATES:
+                if job.status in JOB_TERMINAL_STATES:
                     raise StateConflict("终态任务不可再次变更")
                 if state not in STATE_TRANSITIONS.get(job.status, frozenset()):
                     raise StateConflict(f"不允许从 {job.status} 转移到 {state}")
@@ -850,6 +1692,57 @@ class QueueStore:
                 (now,),
             )
             return int(cursor.rowcount)
+
+    def get_telegram_preference(
+        self, chat_id: int, user_id: int
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT chat_id, user_id, last_save_path_cid, updated_at
+                FROM telegram_preferences
+                WHERE chat_id = ? AND user_id = ?
+                """,
+                (int(chat_id), int(user_id)),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "chatId": int(row["chat_id"]),
+                "userId": int(row["user_id"]),
+                "lastSavePathCid": row["last_save_path_cid"],
+                "updatedAt": float(row["updated_at"]),
+            }
+
+    def set_telegram_preference(
+        self,
+        chat_id: int,
+        user_id: int,
+        last_save_path_cid: str | None,
+        *,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        value = None if last_save_path_cid in (None, "") else str(last_save_path_cid).strip()
+        if value is not None and not re.fullmatch(r"[0-9]+", value):
+            raise ValueError("last_save_path_cid 必须是数字 CID")
+        timestamp = _now() if now is None else float(now)
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO telegram_preferences(chat_id, user_id, last_save_path_cid, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                    last_save_path_cid = excluded.last_save_path_cid,
+                    updated_at = excluded.updated_at
+                """,
+                (int(chat_id), int(user_id), value, timestamp),
+            )
+        return {
+            "chatId": int(chat_id),
+            "userId": int(user_id),
+            "lastSavePathCid": value,
+            "updatedAt": timestamp,
+        }
 
     def get_state(self, key: str) -> str | None:
         """Read a small durable cursor used by the Telegram poller."""

@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.8.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.9.0-orange" alt="Version">
 </p>
 
 ---
@@ -138,9 +138,9 @@ pixi run deploy
 
 ### 本地自动任务 Bridge
 
-扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。Bridge 默认关闭；在设置页启用时，浏览器只请求 `http://127.0.0.1/*` 可选权限，传输地址和端口仍固定，Bearer token 只保存在本地设置并由 service worker 使用，不会注入网页或转发 Cookie。
+扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。Bridge 默认关闭；在设置页启用时，浏览器只请求 `http://127.0.0.1/*` 可选权限，传输地址和端口仍固定，Bearer token 只保存在本地设置并由 service worker 使用，不会注入网页或转发 Cookie。Bridge 的 Intent 只接受严格的 BTIH Magnet 或 ED2K file 链接。
 
-设置页可填写 token 和目标目录 CID。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile`（`/av` 为 `jav`、`/anime` 为 `anime`）和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Bridge 的 Telegram `/av` 查询 JavBus，`/anime 关键词` 查询受限的 Nyaa RSS，并将 Anime 任务固定为 `sourceSite=nyaa`、`mediaType=anime`、`processorProfile=anime`；Windows 启动、token、Telegram allowlist、Nyaa 来源和 CORS 配置见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
+设置页可填写 token 和 Bridge 默认 CID；该 CID 只在领取的任务没有指定 `savePathCid` 时使用，任务自带的 CID 会被保留。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile`（`/av` 为 `jav`、`/anime` 为 `anime`）和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Telegram 支持 `/dir` 选择静态目录、`/add <Magnet|ED2K>` 直接入队和 `/jobs` 查看任务；详情页可对失败任务重试、对进行中任务取消。取消进行中任务只停止扩展本地任务和监控，不取消 115 云端离线任务；排队中的任务可以直接终止。Bridge 的 `/av` 查询 JavBus，现有 `/anime 关键词` 保持 Nyaa RSS 搜索，本版本没有新增 RSS、订阅或自动搜索能力。Windows 启动、token、Telegram allowlist、静态目录、Nyaa 来源和 CORS 配置见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
 
 在仓库根目录使用 Pixi 启动 Bridge：
 

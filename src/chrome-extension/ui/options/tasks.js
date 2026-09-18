@@ -58,7 +58,7 @@
 		}
 
 		for (const task of ordered) {
-			const status = ['waiting', 'processing', 'recorded', 'completed', 'failed'].includes(task.status) ? task.status : 'recorded'
+			const status = ['waiting', 'processing', 'recorded', 'completed', 'failed', 'cancelled'].includes(task.status) ? task.status : 'recorded'
 			const card = document.createElement('article')
 			card.className = `push115-task-card ${status}`
 			const header = document.createElement('div')

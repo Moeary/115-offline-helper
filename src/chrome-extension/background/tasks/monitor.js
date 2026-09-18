@@ -176,8 +176,9 @@
 				targetFile: direct.item,
 				config,
 				appendLog: store.appendLog,
-				checkpoint: () => store.persist(task),
+				checkpoint: () => checkpointTask(task),
 			})
+			if (!await taskStillActive(task)) return
 			task.message = messages.length > 0 ? messages.join('，') : '已确认单文件下载结果'
 		} else {
 			task.message = '已确认单文件下载结果，保留其他目录内容'
@@ -188,7 +189,33 @@
 		if (profile === 'jav' && config.push115_auto_organize === true) notifyTask(task, '115 离线助手处理完成', task.message)
 	}
 
+	async function taskStillActive(task) {
+		if (!store.taskIsActive(task)) return false
+		if (store.isCancelled?.(task?.taskId)) return false
+		try {
+			const current = (await store.read()).find(item => String(item?.taskId || '') === String(task?.taskId || ''))
+			// processTask is also used before a newly submitted task is persisted;
+			// absence from storage is not cancellation.
+			return !current || store.taskIsActive(current)
+		} catch (error) {
+			// A read failure should keep the existing retry path; persist() still
+			// refuses to overwrite a cancellation tombstone when storage recovers.
+			return true
+		}
+	}
+
+	async function checkpointTask(task) {
+		const result = await store.persist(task)
+		if (result?.cancelled || store.isCancelled?.(task?.taskId)) {
+			const error = new Error('本地任务已取消')
+			error.code = 'TASK_CANCELLED'
+			throw error
+		}
+		return result
+	}
+
 	async function processTask(task) {
+		if (!await taskStillActive(task)) return
 		const config = await getConfigSnapshot()
 		const profile = normalizeProcessorProfile(task.processorProfile, task.mediaType === 'anime' ? 'anime' : task.code ? 'jav' : 'generic')
 		task.processorProfile = profile
@@ -213,17 +240,21 @@
 		// Resume from the persisted file IDs even after the offline record or the
 		// now-empty source directory disappears. Never fall back to library-wide cleanup.
 		if (profile === 'anime' && task.animeTransfer) {
+			if (!await taskStillActive(task)) return
 			await finishProcessing(task, task.animeTransfer.sourceCid, true, config, profile)
 			return
 		}
 		if (profile === 'jav' && task.directPlan) {
+			if (!await taskStillActive(task)) return
 			const direct = await resolveDirectFile(task, null)
 			if (direct) {
+				if (!await taskStillActive(task)) return
 				await completeDirectFile(task, direct, config, profile)
 				return
 			}
 		}
 		const remoteTasks = await offlineApi.getTasks()
+		if (!await taskStillActive(task)) return
 		const flatten = global.Push115.AnimeSeries.needsFlatten(task)
 		const stableJobId = String(task.remoteId || task.jobId || task.metadata?.bridgeJobId || '').trim().toLowerCase()
 		const matchingRemoteTasks = remoteTasks.filter(item => flatten && stableJobId
@@ -266,9 +297,11 @@
 		}
 
 		if (flatten) {
+			if (!await taskStillActive(task)) return
 			const folders = global.Push115.Background.Folders
 			const direct = await resolveDirectFile(task, remoteTask)
 			if (direct) {
+				if (!await taskStillActive(task)) return
 				await completeDirectFile(task, direct, config, profile)
 				return
 			}
@@ -282,16 +315,19 @@
 			if (!source) {
 				throw new Error('未明确定位到本任务目录，保留文件等待重试')
 			}
+			if (!await taskStillActive(task)) return
 			await finishProcessing(task, folders.cidOf(source), true, config, profile)
 			return
 		}
 		const direct = await resolveDirectFile(task, remoteTask)
 		if (direct) {
+			if (!await taskStillActive(task)) return
 			await completeDirectFile(task, direct, config, profile)
 			return
 		}
 
 		if (forcedMonitoring && !processorNeedsWork(profile, config, task)) {
+			if (!await taskStillActive(task)) return
 			task.status = 'completed'
 			task.completedAt = task.updatedAt = Date.now()
 			task.message = '115 离线下载完成'
@@ -319,6 +355,7 @@
 		}
 		const targetCid = folderResolved ? folderCid : ''
 		if (!targetCid) throw new Error('未找到下载完成后的 115 目录')
+		if (!await taskStillActive(task)) return
 		await finishProcessing(task, targetCid, folderResolved, config, profile)
 	}
 
@@ -481,7 +518,8 @@
 		task.updatedAt = Date.now()
 		store.appendLog(task, `离线下载完成，开始执行 ${profile} 后处理`)
 		const processor = processors[profile] || processors.generic
-		const messages = await processor.process({ task, targetCid, folderResolved, config, appendLog: store.appendLog, checkpoint: () => store.persist(task) })
+		const messages = await processor.process({ task, targetCid, folderResolved, config, appendLog: store.appendLog, checkpoint: () => checkpointTask(task) })
+		if (!await taskStillActive(task)) return
 		task.status = 'completed'
 		task.completedAt = Date.now()
 		task.message = messages.length > 0 ? messages.join('，') : '处理完成，未发现需要修改的文件'
@@ -503,16 +541,25 @@
 			const { selected, start } = selectRoundRobin(active, await readCursor())
 			for (let offset = 0; offset < selected.length; offset += 1) {
 				const task = selected[offset]
+				if (!await taskStillActive(task)) {
+					const nextIndex = (start + offset + 1) % active.length
+					await writeCursor(active[nextIndex]?.taskId || '')
+					continue
+				}
+				let cancelled = false
 				try {
 					await processTask(task)
 				} catch (error) {
-					task.status = 'waiting'
-					task.lastError = error?.message || String(error)
-					task.message = `后台处理遇到波动，将稍后重试：${task.lastError}`
-					task.updatedAt = Date.now()
-					if (task.attempts === 0 || task.attempts % 5 === 0) store.appendLog(task, task.message)
+					cancelled = error?.code === 'TASK_CANCELLED' || store.isCancelled?.(task?.taskId) === true
+					if (!cancelled) {
+						task.status = 'waiting'
+						task.lastError = error?.message || String(error)
+						task.message = `后台处理遇到波动，将稍后重试：${task.lastError}`
+						task.updatedAt = Date.now()
+						if (task.attempts === 0 || task.attempts % 5 === 0) store.appendLog(task, task.message)
+					}
 				}
-				await store.persist(task)
+				if (!cancelled) await store.persist(task)
 				const nextIndex = (start + offset + 1) % active.length
 				await writeCursor(active[nextIndex]?.taskId || '')
 			}

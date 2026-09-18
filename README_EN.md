@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-<img src="https://img.shields.io/badge/version-1.8.0-orange" alt="Version">
+<img src="https://img.shields.io/badge/version-1.9.0-orange" alt="Version">
 </p>
 
 ---
@@ -118,9 +118,9 @@ Download the latest archive from [Releases](https://github.com/gangz1o/115-offli
 
 ### Local automation Bridge
 
-The extension can optionally connect to a local FastAPI service at `http://127.0.0.1:52115`, claim Telegram `/av` and JavBus candidates, and submit them through the existing background `Router.submitIntent` path. Bridge is off by default. Enabling it requests only the optional `http://127.0.0.1/*` permission; the transport origin and port remain fixed. The Bearer token stays in local extension storage, is used only by the service worker, and is never injected into pages or sent as a cookie.
+The extension can optionally connect to a local FastAPI service at `http://127.0.0.1:52115`, claim Telegram `/av` and JavBus candidates, and submit them through the existing background `Router.submitIntent` path. Bridge is off by default. Enabling it requests only the optional `http://127.0.0.1/*` permission; the transport origin and port remain fixed. The Bearer token stays in local extension storage, is used only by the service worker, and is never injected into pages or sent as a cookie. Bridge Intents accept strict BTIH Magnet or ED2K file links.
 
-The Settings page accepts the token and target directory CID. The worker claims one job every 30 seconds, persists its `jobId`, lease and submission state before submitting an intent with an explicit `processorProfile` (`jav` for `/av`, `anime` for `/anime`) and `metadata.monitorDownload: true`, then reports progress and terminal states with stable event IDs. If a network failure, worker restart or local persistence error leaves the submission result unclear, the job becomes `uncertain` and is never submitted again automatically. A local `recorded` history entry is never reported as completed. Bridge Telegram `/av` searches JavBus, while `/anime keyword` searches the restricted Nyaa RSS provider and emits explicit `sourceSite=nyaa`, `mediaType=anime` and `processorProfile=anime`. Windows startup, token, Telegram allowlist, Nyaa source and CORS configuration are described in [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md).
+The Settings page accepts the token and a Bridge default CID. That CID is used only when a claimed job has no `savePathCid`; an explicit job CID is preserved. The worker claims one job every 30 seconds, persists its `jobId`, lease and submission state before submitting an intent with an explicit `processorProfile` (`jav` for `/av`, `anime` for `/anime`) and `metadata.monitorDownload: true`, then reports progress and terminal states with stable event IDs. If a network failure, worker restart or local persistence error leaves the submission result unclear, the job becomes `uncertain` and is never submitted again automatically. A local `recorded` history entry is never reported as completed. Telegram supports `/dir` for a static directory picker, `/add <Magnet|ED2K>` for direct enqueueing and `/jobs` for the user's task list; task details offer retry for failed jobs and cancel for active jobs. Cancelling an active job stops the local extension task and monitoring only; it does not cancel the 115 cloud offline task. A queued job can be terminated directly. Bridge Telegram `/av` searches JavBus, while the existing `/anime keyword` Nyaa RSS search remains available; this release adds no RSS, subscription or automatic-search feature. Windows startup, token, Telegram allowlist, static directories, Nyaa source and CORS configuration are described in [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md).
 
 Start the Bridge from the repository root with Pixi:
 

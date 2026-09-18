@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping
+import unicodedata
 from urllib.parse import urlsplit
 
 
@@ -60,6 +62,71 @@ def _parse_int_set(value: str) -> frozenset[int]:
         except ValueError as error:
             raise ValueError(f"{item!r} 不是有效的 Telegram ID") from error
     return frozenset(values)
+
+
+_TELEGRAM_SAVE_PATH_CID = re.compile(r"(?:0|[1-9][0-9]{0,63})\Z")
+_MAX_TELEGRAM_SAVE_PATHS = 50
+_MAX_TELEGRAM_SAVE_PATH_NAME = 128
+
+
+@dataclass(frozen=True)
+class TelegramSavePath:
+    """One manually configured Telegram save-path option.
+
+    The bridge deliberately keeps the CID as a string.  It never queries 115
+    to resolve or validate the directory because it does not hold a 115
+    cookie; the extension performs any account-side validation when it claims
+    the resulting intent.
+    """
+
+    cid: str
+    name: str
+
+
+def _remove_control_characters(value: str) -> str:
+    return "".join(
+        character
+        for character in str(value)
+        if unicodedata.category(character) != "Cc"
+    )
+
+
+def _parse_telegram_save_paths(value: str) -> tuple[TelegramSavePath, ...]:
+    """Parse ``CID=display name`` entries in their configured order."""
+
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return ()
+
+    paths: list[TelegramSavePath] = []
+    seen_cids: set[str] = set()
+    for raw_entry in raw_value.split(","):
+        entry = raw_entry.strip()
+        if not entry:
+            raise ValueError("PUSH115_TELEGRAM_SAVE_PATHS 不允许空项")
+        cid, separator, raw_name = entry.partition("=")
+        cid = cid.strip()
+        if not separator or not _TELEGRAM_SAVE_PATH_CID.fullmatch(cid):
+            raise ValueError(
+                "PUSH115_TELEGRAM_SAVE_PATHS 必须使用十进制 CID=显示名格式"
+            )
+        if cid in seen_cids:
+            raise ValueError(f"PUSH115_TELEGRAM_SAVE_PATHS 含有重复 CID：{cid}")
+        name = _remove_control_characters(raw_name).strip()
+        if not name:
+            raise ValueError(f"PUSH115_TELEGRAM_SAVE_PATHS 的 CID {cid} 缺少显示名")
+        if len(name) > _MAX_TELEGRAM_SAVE_PATH_NAME:
+            raise ValueError(
+                f"PUSH115_TELEGRAM_SAVE_PATHS 的显示名不能超过 {_MAX_TELEGRAM_SAVE_PATH_NAME} 个字符"
+            )
+        seen_cids.add(cid)
+        paths.append(TelegramSavePath(cid=cid, name=name))
+
+    if len(paths) > _MAX_TELEGRAM_SAVE_PATHS:
+        raise ValueError(
+            f"PUSH115_TELEGRAM_SAVE_PATHS 最多允许 {_MAX_TELEGRAM_SAVE_PATHS} 个目录"
+        )
+    return tuple(paths)
 
 
 def _parse_cors_origins(value: str) -> tuple[str, ...]:
@@ -160,6 +227,7 @@ class Settings:
     nyaa_timeout_seconds: float = 15.0
     nyaa_max_response_bytes: int = 2_000_000
     nyaa_max_results: int = 20
+    telegram_save_paths: tuple[TelegramSavePath, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -222,9 +290,14 @@ class Settings:
         telegram_token = env("PUSH115_TELEGRAM_BOT_TOKEN")
         allowed_chats = _parse_int_set(env("PUSH115_TELEGRAM_ALLOWED_CHAT_IDS"))
         allowed_users = _parse_int_set(env("PUSH115_TELEGRAM_ALLOWED_USER_IDS"))
-        if telegram_polling and (not telegram_token or not allowed_chats):
+        telegram_save_paths = _parse_telegram_save_paths(
+            env("PUSH115_TELEGRAM_SAVE_PATHS")
+        )
+        if telegram_polling and (
+            not telegram_token or not allowed_chats or not telegram_save_paths
+        ):
             raise ValueError(
-                "启用 Telegram polling 时必须设置 Bot token 和非空 chat allowlist"
+                "启用 Telegram polling 时必须设置 Bot token、非空 chat allowlist 和保存目录 allowlist"
             )
 
         lease_seconds = int(env("PUSH115_BRIDGE_LEASE_SECONDS", "120"))
@@ -277,6 +350,7 @@ class Settings:
             nyaa_max_results=max(
                 1, min(100, int(env("PUSH115_NYAA_MAX_RESULTS", "20")))
             ),
+            telegram_save_paths=telegram_save_paths,
         )
 
 
