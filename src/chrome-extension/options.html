@@ -62,7 +62,19 @@
 						<div class="push115-field">
 							<label for="push115-save-dirs-input" data-i18n="save_dirs_label">115 离线目录（一行一个）</label>
 							<textarea id="push115-save-dirs-input" rows="4" data-placeholder="save_dirs_placeholder" placeholder="例如：电影:123456789"></textarea>
-							<p class="push115-hint" data-i18n="save_dirs_hint">格式：目录名:CID，例如：电影:123456789。</p>
+							<p class="push115-hint" data-i18n="save_dirs_hint">格式：目录名:CID，例如：电影:123456789；也可从下方扫描结果点选。手工 CID 仍作为高级 fallback。</p>
+						</div>
+
+						<div class="push115-directory-browser">
+							<div class="push115-directory-browser-heading">
+								<div>
+									<h3 data-i18n="directory_index_title">115 目录索引</h3>
+									<p data-i18n="directory_index_hint">先扫描根目录一级；可将目录加入上方列表，或显式扫描它的子目录并同步给本地 Bridge。</p>
+								</div>
+								<button class="push115-btn push115-btn-secondary" id="push115-scan-directories" type="button" data-i18n="directory_scan_button">扫描目录</button>
+							</div>
+							<div id="push115-directory-index" class="push115-directory-index" aria-live="polite"></div>
+							<p id="push115-directory-status" class="push115-hint"></p>
 						</div>
 
 						<div class="push115-divider"></div>

@@ -340,21 +340,85 @@ class TelegramService:
             return False
         return not self.allowed_user_ids or user in self.allowed_user_ids
 
+    def _latest_directory_registry(self) -> Mapping[str, Any] | None:
+        """Read the current browser snapshot without caching it in the service."""
+
+        getter = getattr(self.store, "get_directory_registry", None)
+        if not callable(getter):
+            return None
+        try:
+            value = getter()
+        except Exception:
+            return None
+        if not isinstance(value, Mapping):
+            return None
+        nested = value.get("registry")
+        if isinstance(nested, Mapping):
+            return nested
+        return value
+
+    @staticmethod
+    def _registry_path_options(
+        registry: Mapping[str, Any],
+    ) -> tuple[tuple[str, str], ...]:
+        raw_directories = registry.get("directories")
+        entries: Sequence[object] = ()
+        if isinstance(raw_directories, Sequence) and not isinstance(
+            raw_directories, (str, bytes, bytearray)
+        ):
+            entries = raw_directories
+        # Some early browser snapshots represented roots as full entries and
+        # kept ``directories`` for descendants.  Use those roots only when
+        # they carry a displayable name; string root CIDs remain references.
+        if not entries:
+            raw_roots = registry.get("roots")
+            if isinstance(raw_roots, Sequence) and not isinstance(
+                raw_roots, (str, bytes, bytearray)
+            ):
+                entries = raw_roots
+
+        options: list[tuple[str, str]] = []
+        seen_cids: set[str] = set()
+        seen_paths: set[str] = set()
+        for item in entries:
+            cid = str(_field(item, "cid", "") or "").strip()
+            name = _clip(_field(item, "name", ""), 128)
+            path = str(_field(item, "path", "") or "").strip()
+            if not _TELEGRAM_SAVE_PATH_CID.fullmatch(cid) or not name:
+                continue
+            if cid in seen_cids or (path and path in seen_paths):
+                continue
+            seen_cids.add(cid)
+            if path:
+                seen_paths.add(path)
+            label = "根目录" if cid == "0" else _clip(path or name, 128)
+            options.append((cid, label))
+        if options and "0" not in seen_cids:
+            options.insert(0, ("0", "根目录"))
+        return tuple(options)
+
     def _path_options(self) -> tuple[tuple[str, str], ...]:
-        return tuple((cid, name) for cid, name in self.save_paths if cid in self._save_path_map)
+        registry = self._latest_directory_registry()
+        if registry is not None:
+            return self._registry_path_options(registry)
+        return self.save_paths
 
     def _path_label(self, cid: object) -> str:
         value = str("" if cid is None else cid).strip()
-        return self._save_path_map.get(value, f"CID {value or '?'}")
+        path_map = dict(self._path_options())
+        return path_map.get(value, f"CID {value or '?'}")
 
     def _preferred_save_path(
         self,
         chat_id: int,
         user_id: int,
+        *,
+        allow_legacy_root: bool = True,
     ) -> tuple[str | None, bool]:
-        """Return (CID, explicitly remembered) without consulting 115."""
+        """Return the current directory and whether it was user-selected."""
 
         options = self._path_options()
+        registry = self._latest_directory_registry()
         preference = None
         getter = getattr(self.store, "get_telegram_preference", None)
         if callable(getter):
@@ -363,20 +427,25 @@ class TelegramService:
                 preference = str((value or {}).get("lastSavePathCid") or "").strip()
             except Exception:
                 preference = None
-        if preference and preference in self._save_path_map:
+        if preference and preference in dict(options):
             return preference, True
         if options:
             return options[0][0], False
-        # Direct service tests and pre-allowlist local instances historically
-        # used the root CID. Production polling is rejected without a
-        # configured allowlist by Settings.from_env, so this is only a
-        # backwards-compatible in-process fallback.
-        return "0", False
+        # Keep the old in-process root default for callers that predate the
+        # registry API.  An explicitly present (including empty) browser
+        # registry never falls through to that implicit CID.
+        if registry is None and allow_legacy_root:
+            return "0", False
+        return None, False
 
     def _directory_text(self, chat_id: int, user_id: int) -> str:
         options = self._path_options()
         if not options:
-            return "未配置 Telegram 保存目录，请先设置 PUSH115_TELEGRAM_SAVE_PATHS。"
+            if self._latest_directory_registry() is not None or callable(
+                getattr(self.store, "get_directory_registry", None)
+            ):
+                return "浏览器尚未同步 115 目录，请先打开扩展并同步目录后重试。"
+            return "未配置 Telegram 保存目录，请先同步 115 目录或设置 PUSH115_TELEGRAM_SAVE_PATHS。"
         selected, remembered = self._preferred_save_path(chat_id, user_id)
         current = self._path_label(selected)
         source = "上次选择" if remembered else "默认目录"
@@ -832,7 +901,9 @@ class TelegramService:
         chat_id, user_id = self._chat_user(message)
         if chat_id is None or user_id is None:
             return {"handled": True, "error": "invalid_message"}
-        save_path_cid, _remembered = self._preferred_save_path(chat_id, user_id)
+        save_path_cid, _remembered = self._preferred_save_path(
+            chat_id, user_id, allow_legacy_root=False
+        )
         if not save_path_cid:
             await self.transport.send_message(chat_id, self._directory_text(chat_id, user_id))
             return {"handled": True, "error": "save_path_unavailable"}
@@ -1027,7 +1098,7 @@ class TelegramService:
             raw_intent = dict(_as_mapping(payload.get("intent")))
             save_path_cid, _remembered = self._preferred_save_path(chat_id, user_id)
             if not save_path_cid:
-                await self._answer(callback_id, text="未配置保存目录")
+                await self._answer(callback_id, text="浏览器尚未同步 115 目录")
                 return {"handled": True, "error": "save_path_unavailable"}
             raw_intent["savePathCid"] = save_path_cid
             try:
@@ -1086,7 +1157,7 @@ class TelegramService:
                 await self._answer(callback_id, text="按钮已失效")
                 return {"handled": True, "error": "invalid_callback"}
             cid = str(payload.get("cid") or "").strip()
-            if cid not in self._save_path_map:
+            if cid not in dict(self._path_options()):
                 await self._answer(callback_id, text="保存目录已不可用")
                 return {"handled": True, "error": "invalid_save_path"}
             setter = getattr(self.store, "set_telegram_preference", None)

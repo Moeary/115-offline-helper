@@ -37,6 +37,7 @@ REQUIRED_ARCHITECTURE_ENTRIES = (
     "content/ui/submission-queue.js",
     "background/api/client.js",
     "background/tasks/folders.js",
+    "background/directory-index.js",
     "background/tasks/anime-library.js",
     "background/tasks/store.js",
     "background/tasks/monitor.js",

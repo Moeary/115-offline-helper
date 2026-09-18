@@ -293,11 +293,9 @@ class Settings:
         telegram_save_paths = _parse_telegram_save_paths(
             env("PUSH115_TELEGRAM_SAVE_PATHS")
         )
-        if telegram_polling and (
-            not telegram_token or not allowed_chats or not telegram_save_paths
-        ):
+        if telegram_polling and (not telegram_token or not allowed_chats):
             raise ValueError(
-                "启用 Telegram polling 时必须设置 Bot token、非空 chat allowlist 和保存目录 allowlist"
+                "启用 Telegram polling 时必须设置 Bot token 和非空 chat allowlist"
             )
 
         lease_seconds = int(env("PUSH115_BRIDGE_LEASE_SECONDS", "120"))

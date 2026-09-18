@@ -118,7 +118,7 @@ def test_telegram_save_paths_reject_more_than_fifty_entries(
         Settings.from_env()
 
 
-def test_telegram_polling_requires_a_non_empty_save_path_allowlist(
+def test_telegram_polling_can_start_before_browser_directory_sync(
     monkeypatch, tmp_path: Path
 ) -> None:
     for key in _CONFIG_KEYS:
@@ -128,8 +128,9 @@ def test_telegram_polling_requires_a_non_empty_save_path_allowlist(
     monkeypatch.setenv("PUSH115_TELEGRAM_POLLING", "1")
     monkeypatch.setenv("PUSH115_TELEGRAM_BOT_TOKEN", "123456:bot")
     monkeypatch.setenv("PUSH115_TELEGRAM_ALLOWED_CHAT_IDS", "123")
-    with pytest.raises(ValueError, match="保存目录 allowlist"):
-        Settings.from_env()
+    settings = Settings.from_env()
+    assert settings.telegram_polling is True
+    assert settings.telegram_save_paths == ()
 
 
 def test_cors_wildcard_is_rejected(monkeypatch, tmp_path: Path) -> None:

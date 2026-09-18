@@ -571,3 +571,112 @@ def test_cancelled_status_notification_and_same_link_can_be_added_again() -> Non
         assert second["jobId"] != first_job.job_id
     finally:
         store.close()
+
+
+def _telegram_registry(revision: int, entries: list[dict]) -> dict:
+    return {
+        "schema": 1,
+        "revision": revision,
+        "scannedAt": 1700000000000 + revision,
+        "roots": ["0"],
+        "directories": entries,
+    }
+
+
+def test_telegram_reads_dynamic_registry_without_restart_and_keeps_static_fallback() -> None:
+    store = QueueStore(":memory:")
+    transport = FakeTransport()
+    service = TelegramService(
+        store,
+        FakeProvider(),
+        transport,
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        save_paths=(("0", "旧根目录"),),
+        clock=lambda: 50,
+    )
+    try:
+        static = asyncio.run(service.handle_update({"message": _message("/dir")}))
+        assert static["kind"] == "dir"
+        assert "旧根目录" in transport.messages[-1][2]
+
+        store.set_directory_registry(
+            _telegram_registry(
+                1,
+                [
+                    {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+                    {"cid": "9", "parentCid": "0", "name": "动画", "path": "/动画", "depth": 1},
+                ],
+            )
+        )
+        first = asyncio.run(service.handle_update({"message": _message("/dir")}))
+        assert first["kind"] == "dir"
+        first_keyboard = transport.messages[-1][3]["inline_keyboard"]
+        assert any("动画" in row[0]["text"] for row in first_keyboard)
+        assert all("旧根目录" not in row[0]["text"] for row in first_keyboard)
+
+        store.set_directory_registry(
+            _telegram_registry(
+                2,
+                [
+                    {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+                    {"cid": "11", "parentCid": "0", "name": "新目录", "path": "/新目录", "depth": 1},
+                ],
+            )
+        )
+        latest = asyncio.run(service.handle_update({"message": _message("/dir")}))
+        assert latest["kind"] == "dir"
+        latest_keyboard = transport.messages[-1][3]["inline_keyboard"]
+        assert any("新目录" in row[0]["text"] for row in latest_keyboard)
+        assert all("动画" not in row[0]["text"] for row in latest_keyboard)
+    finally:
+        store.close()
+
+
+def test_telegram_empty_registry_prompts_sync_and_blocks_add_and_candidate() -> None:
+    store = QueueStore(":memory:")
+    transport = FakeTransport()
+    service = TelegramService(
+        store,
+        FakeProvider(),
+        transport,
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        clock=lambda: 50,
+    )
+    try:
+        store.set_directory_registry(_telegram_registry(1, []))
+        directory = asyncio.run(service.handle_update({"message": _message("/dir")}))
+        assert directory["kind"] == "dir"
+        assert "浏览器尚未同步 115 目录" in transport.messages[-1][2]
+
+        magnet = "magnet:?xt=urn:btih:" + "f" * 32
+        added = asyncio.run(
+            service.handle_update({"message": _message("/add " + magnet, message_id=1)})
+        )
+        assert added["error"] == "save_path_unavailable"
+        assert "浏览器尚未同步 115 目录" in transport.messages[-1][2]
+        assert store.list_jobs() == []
+
+        store.set_directory_registry(
+            _telegram_registry(
+                2,
+                [
+                    {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+                ],
+            )
+        )
+        lookup = asyncio.run(service.handle_update({"message": _message("/av ABC-123")}))
+        assert lookup["kind"] == "av"
+        candidate_data = transport.messages[-1][3]["inline_keyboard"][0][0]["callback_data"]
+        lookup_message_id = transport.next_id
+        store.set_directory_registry(_telegram_registry(3, []))
+        selected = asyncio.run(
+            service.handle_update(
+                {"callback_query": _callback(candidate_data, lookup_message_id, callback_id="empty")}
+            )
+        )
+        assert selected["error"] == "save_path_unavailable"
+        assert store.list_jobs() == []
+    finally:
+        store.close()

@@ -16,10 +16,10 @@ pixi install
 Copy-Item src\fastapi-bridge\.env.example src\fastapi-bridge\.env
 ```
 
-再按实际环境修改 `src\fastapi-bridge\.env` 中的 `PUSH115_BRIDGE_CORS_ORIGINS`、Telegram token、
-allowlist 和静态保存目录表。启用 Telegram polling 时，Bot token、非空 chat allowlist 和
-`PUSH115_TELEGRAM_SAVE_PATHS` 都是必需项。目录表使用 `CID=显示名,...` 格式，例如
-`123=影视,456=动漫`；Bridge 不查询 115 目录，也不接收 115 Cookie。服务启动时会读取这个简单的 `KEY=VALUE` 文件；同名环境变量优先，
+再按实际环境修改 `src\fastapi-bridge\.env` 中的 `PUSH115_BRIDGE_CORS_ORIGINS`、Telegram token
+和 allowlist。启用 Telegram polling 时只要求 Bot token 和非空 chat allowlist；
+`PUSH115_TELEGRAM_SAVE_PATHS` 现在是浏览器 Directory Registry 尚未同步时的可选兼容 fallback。
+目录表使用 `CID=显示名,...` 格式，例如 `123=影视,456=动漫`；Bridge 不查询 115 目录，也不接收 115 Cookie。服务启动时会读取这个简单的 `KEY=VALUE` 文件；同名环境变量优先，
 也可以只在当前 PowerShell 会话中覆盖需要的值，例如：
 
 ```powershell
@@ -59,6 +59,8 @@ BTIH Magnet 或 ED2K file 链接。主要路由如下：
 
 | 路由 | 用途 |
 |------|------|
+| `GET /v1/runtime/directories` | 读取当前浏览器同步的目录 registry |
+| `PUT /v1/runtime/directories` | 以 revision 幂等更新目录 registry |
 | `GET /v1/jobs?status=...&limit=...&cursor=...` | 按状态和游标分页查看任务 |
 | `GET /v1/jobs/{jobId}` | 查看单个任务及待处理动作 |
 | `POST /v1/jobs/{jobId}/retry` | 对失败任务创建一次幂等重试 |
@@ -99,9 +101,12 @@ Content-Type: application/json
 
 ## Telegram
 
-启用 `PUSH115_TELEGRAM_POLLING=1` 时必须设置 Bot token、非空 chat allowlist 和静态目录表
-`PUSH115_TELEGRAM_SAVE_PATHS=CID=显示名,...`；可选的 user allowlist 会进一步限制发送者。
-Bridge 不查询 115 目录，也不接收或保存 115 Cookie。`/dir` 打开目录选择，目录选择按
+启用 `PUSH115_TELEGRAM_POLLING=1` 时必须设置 Bot token 和非空 chat allowlist；静态目录表
+`PUSH115_TELEGRAM_SAVE_PATHS=CID=显示名,...` 仅作为浏览器尚未同步 registry 时的兼容 fallback。
+可选的 user allowlist 会进一步限制发送者。Bridge 不查询 115 目录，也不接收或保存 115 Cookie。
+Chrome 扩展扫描目录后，会把非敏感的路径、CID 和 revision 通过 `PUT /v1/runtime/directories`
+保存到 SQLite；Telegram 每次 `/dir`、`/add` 或候选确认都会读取最新快照，无需重启 Bridge。
+没有快照且没有静态 fallback 时，`/dir` 会提示打开扩展并同步目录。目录选择按
 chat 和 user 记忆；候选按钮点击时使用该用户最新选择的目录。`/add <Magnet|ED2K>`
 直接加入队列，`/jobs` 查看自己的任务列表，进入详情后可重试失败任务或取消活动任务。
 

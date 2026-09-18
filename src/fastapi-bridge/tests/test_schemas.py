@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from bridge.schemas import ActionEventRequest, IntentModel
+from bridge.schemas import ActionEventRequest, DirectoryRegistryRequest, IntentModel
 
 
 def test_intent_accepts_magnet_and_canonical_generic_route() -> None:
@@ -246,4 +246,74 @@ def test_action_result_has_bounded_json_shape() -> None:
                 "state": "applied",
                 "result": {str(index): index for index in range(201)},
             }
+        )
+
+
+def _directory_registry(**overrides):
+    payload = {
+        "schema": 1,
+        "revision": 1,
+        "scannedAt": 1700000000000,
+        "roots": ["0"],
+        "directories": [
+            {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+            {"cid": "12", "parentCid": "0", "name": "影视", "path": "/影视", "depth": 1},
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_directory_registry_accepts_aliases_and_preserves_bounded_entries() -> None:
+    registry = DirectoryRegistryRequest.model_validate(_directory_registry())
+    assert registry.revision == 1
+    assert registry.directories[1].parent_cid == "0"
+    assert registry.model_dump(by_alias=True)["scannedAt"] == 1700000000000
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _directory_registry(
+            directories=[
+                {"cid": "1", "name": "一", "path": "/同一路径", "depth": 0},
+                {"cid": "2", "name": "二", "path": "/同一路径", "depth": 0},
+            ]
+        ),
+        _directory_registry(
+            directories=[
+                {"cid": "1", "name": "一", "path": "/一", "depth": 0},
+                {"cid": "1", "name": "二", "path": "/二", "depth": 0},
+            ]
+        ),
+        _directory_registry(
+            directories=[{"cid": "01", "name": "一", "path": "/一", "depth": 0}]
+        ),
+        _directory_registry(
+            directories=[{"cid": "1", "name": "一", "path": "../一", "depth": 0}]
+        ),
+        _directory_registry(
+            directories=[{"cid": "1", "name": "一", "path": "/一/../二", "depth": 0}]
+        ),
+    ],
+)
+def test_directory_registry_rejects_duplicate_or_unsafe_entries(payload) -> None:
+    with pytest.raises(Exception):
+        DirectoryRegistryRequest.model_validate(payload)
+
+
+def test_directory_registry_rejects_oversized_input() -> None:
+    with pytest.raises(Exception):
+        DirectoryRegistryRequest.model_validate(
+            _directory_registry(
+                directories=[
+                    {
+                        "cid": str(index + 1),
+                        "name": "目录",
+                        "path": f"/目录{index}",
+                        "depth": 0,
+                    }
+                    for index in range(5001)
+                ]
+            )
         )

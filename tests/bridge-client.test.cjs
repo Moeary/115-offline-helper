@@ -168,6 +168,27 @@ test('bridge transport uses the fixed URL, bearer header, omit credentials, and 
 	assert.equal(e.calls.length, 1)
 })
 
+test('directory registry sync uses the authenticated loopback PUT contract', async () => {
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+		fetchHandler: async () => response({ schema: 1, revision: 4 }),
+	})
+	const result = await e.client.syncDirectoryRegistry({
+		schema: 1,
+		revision: 4,
+		scannedAt: 123,
+		roots: ['0'],
+		directories: [{ cid: '42', parentCid: '0', name: '影视', path: '/影视', depth: 1 }],
+	})
+	assert.equal(result.revision, 4)
+	assert.equal(e.calls[0][0], 'http://127.0.0.1:52115/v1/runtime/directories')
+	assert.equal(e.calls[0][1].method, 'PUT')
+	assert.equal(e.calls[0][1].headers.Authorization, 'Bearer secret-token')
+	assert.deepEqual(JSON.parse(e.calls[0][1].body).directories, [{
+		cid: '42', parentCid: '0', name: '影视', path: '/影视', depth: 1,
+	}])
+})
+
 test('bridge response body remains covered by the abort timeout', async () => {
 	let aborted = false
 	const e = environment({

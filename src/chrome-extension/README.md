@@ -54,6 +54,7 @@ chrome-extension/
 │  │  ├─ folders.js                  目录分页、CID/FID 路径校验
 │  │  ├─ anime-library.js            番组 → CID 绑定与重复提交回执
 │  │  └─ monitor.js                  下载完成检测与 Processor 调度
+│  ├─ directory-index.js              115 目录扫描、路径/CID 索引与 Bridge 同步
 │  ├─ processors/
 │  │  ├─ cleanup.js                  安全垃圾判断
 │  │  ├─ generic.js                  通用 profile
@@ -127,7 +128,7 @@ Mikan 绑定使用 `push115_anime_library`：`mikan:<BangumiID>` 对应目标 CI
 
 ## 配置、权限与兼容
 
-`push115_site_profiles` 为 Generic、JavBus、Nyaa、Sukebei、Mikan、South Plus 保存 `enabled`、默认目录、默认 profile 和页面控件；目录从设置页共享的离线目录清单选择。旧版 `savePathCid`、`processorProfile`、`enhancementMode` 以及 Mikan `none` 会在读取时迁移。动态注册将 Generic 与专用站点分成两种 runtime，保留 optional `<all_urls>` 与已有 host permission 逻辑；扩展启动或重载时会检查已打开标签页并按运行时标记补注入，避免重复执行；popup 打开时可使用 `activeTab` 对当前 HTTP(S) 页面做一次性兜底注入。South Plus 的记录动作复用本地任务历史并按完整 ED2K 链接去重，不调用 115 API。
+`push115_site_profiles` 为 Generic、JavBus、Nyaa、Sukebei、Mikan、South Plus 保存 `enabled`、默认目录、默认 profile 和页面控件；目录从设置页共享的离线目录清单选择。设置页的 DirectoryIndex 默认只读取根目录一级，用户指定管理 root 后才递归扫描；索引只保存路径、CID、父 CID 和 revision，并在 Bridge 启用时通过固定 loopback Bearer 请求同步，不传输 115 Cookie。旧版 `savePathCid`、`processorProfile`、`enhancementMode` 以及 Mikan `none` 会在读取时迁移。动态注册将 Generic 与专用站点分成两种 runtime，保留 optional `<all_urls>` 与已有 host permission 逻辑；扩展启动或重载时会检查已打开标签页并按运行时标记补注入，避免重复执行；popup 打开时可使用 `activeTab` 对当前 HTTP(S) 页面做一次性兜底注入。South Plus 的记录动作复用本地任务历史并按完整 ED2K 链接去重，不调用 115 API。
 
 稳定的登录、Cookie、115 离线 API、持久任务、日志清理判断均保持原实现；新增逻辑通过消息和 profile 接入。
 

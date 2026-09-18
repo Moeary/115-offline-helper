@@ -20,6 +20,7 @@ const CONFIG_KEYS = {
 	BRIDGE_TOKEN: 'push115_bridge_token',
 	BRIDGE_TARGET_CID: 'push115_bridge_target_cid',
 }
+const DIRECTORY_INDEX_KEY = 'push115_directory_index'
 
 const DEFAULT_CONFIG = {
 	[CONFIG_KEYS.SAVE_PATH]: '',
@@ -58,7 +59,21 @@ const I18N_STRINGS = {
 		threshold_hint: '阈值只用于筛选；主视频、CD/Disc/Part 分片不会因体积小而删除。',
 		save_dirs_label: '115 离线目录（一行一个）',
 		save_dirs_placeholder: '例如：电影:123456789',
-		save_dirs_hint: '格式：目录名:CID，例如：电影:123456789。',
+		save_dirs_hint: '格式：目录名:CID，例如：电影:123456789；也可从扫描结果点选。手工 CID 仍作为高级 fallback。',
+		directory_index_title: '115 目录索引',
+		directory_index_hint: '先扫描根目录一级；可将目录加入上方列表，或显式扫描它的子目录并同步给本地 Bridge。',
+		directory_scan_button: '扫描目录',
+		directory_scan_empty: '尚未扫描目录。请保持 115 登录状态后点击“扫描目录”。',
+		directory_scan_root: '根目录',
+		directory_scan_selected: '已加入',
+		directory_scan_add: '加入',
+		directory_scan_remove: '移除',
+		directory_scan_children: '扫描子目录',
+		directory_scan_success: '已扫描 {count} 个目录；Bridge 同步状态：{bridge}。',
+		directory_scan_failed: '目录扫描失败：',
+		directory_bridge_synced: '已同步',
+		directory_bridge_pending: '待同步',
+		directory_bridge_disabled: 'Bridge 未启用',
 		auto_delete_label: '安全清理广告/垃圾文件',
 		auto_delete_hint: '只处理明确命中的扩展名或小广告视频。',
 		auto_organize_label: '自动整理视频文件',
@@ -138,7 +153,21 @@ const I18N_STRINGS = {
 		threshold_hint: 'This only filters candidates; the main video and CD/Disc/Part files are protected.',
 		save_dirs_label: '115 offline directories (one per line)',
 		save_dirs_placeholder: 'e.g. Movies:123456789',
-		save_dirs_hint: 'Format: Name:CID, e.g. Movies:123456789.',
+		save_dirs_hint: 'Format: Name:CID, e.g. Movies:123456789. You can also pick scan results below; manual CIDs remain an advanced fallback.',
+		directory_index_title: '115 directory index',
+		directory_index_hint: 'Scan the root directory first; add folders above or explicitly scan their children, then sync the index to the local Bridge.',
+		directory_scan_button: 'Scan directories',
+		directory_scan_empty: 'No directory scan yet. Keep 115 signed in, then click “Scan directories”.',
+		directory_scan_root: 'Root directory',
+		directory_scan_selected: 'Added',
+		directory_scan_add: 'Add',
+		directory_scan_remove: 'Remove',
+		directory_scan_children: 'Scan children',
+		directory_scan_success: 'Scanned {count} directories; Bridge sync: {bridge}.',
+		directory_scan_failed: 'Directory scan failed: ',
+		directory_bridge_synced: 'synced',
+		directory_bridge_pending: 'pending',
+		directory_bridge_disabled: 'Bridge disabled',
 		auto_delete_label: 'Safely clean junk/advertising files',
 		auto_delete_hint: 'Only explicit extensions or short advertising videos are handled.',
 		auto_organize_label: 'Auto organize video files',
@@ -205,6 +234,7 @@ const I18N_STRINGS = {
 }
 
 let configCache = { ...DEFAULT_CONFIG }
+let directoryIndex = { schema: 1, revision: 0, scannedAt: 0, roots: ['0'], directories: [] }
 
 function t(key) {
 	const locale = configCache[CONFIG_KEYS.I18N_LOCALE] || 'zh-CN'
@@ -214,6 +244,120 @@ function t(key) {
 
 function replaceCount(text, count) {
 	return String(text || '').replace('{count}', String(count))
+}
+
+function directoryBridgeLabel(result) {
+	const bridge = result?.bridge
+	if (!bridge || bridge.disabled || bridge.skipped) return t('directory_bridge_disabled')
+	if (bridge.permission === false) return t('directory_bridge_pending')
+	return bridge.ok === true ? t('directory_bridge_synced') : t('directory_bridge_pending')
+}
+
+function selectedDirectoryCids() {
+	return new Set((Push115.PathUtils?.parsePathList(
+		document.getElementById('push115-save-dirs-input')?.value || '',
+	) || []).map(item => item.cid))
+}
+
+function toggleDirectory(item) {
+	const input = document.getElementById('push115-save-dirs-input')
+	if (!input || !item?.cid) return
+	const existing = Push115.PathUtils.parsePathList(input.value)
+	const index = existing.findIndex(entry => entry.cid === item.cid)
+	if (index >= 0) existing.splice(index, 1)
+	else existing.push({ name: item.path || item.name || '', cid: item.cid })
+	input.value = existing.map(entry => `${entry.name || ''}:${entry.cid}`).join('\n')
+	renderSavePathSelectors(true)
+	renderDirectoryIndex()
+}
+
+function renderDirectoryIndex() {
+	const container = document.getElementById('push115-directory-index')
+	if (!container) return
+	container.textContent = ''
+	const directories = Array.isArray(directoryIndex?.directories) ? directoryIndex.directories : []
+	if (directories.length === 0) {
+		const empty = document.createElement('div')
+		empty.className = 'push115-directory-empty'
+		empty.textContent = t('directory_scan_empty')
+		container.appendChild(empty)
+		return
+	}
+	const selected = selectedDirectoryCids()
+	for (const item of directories.slice().sort((left, right) => String(left.path || '').localeCompare(String(right.path || ''))) ) {
+		const row = document.createElement('div')
+		row.className = 'push115-directory-row'
+		row.style.setProperty('--push115-directory-depth', String(Math.max(0, Number(item.depth || 1) - 1)))
+		const label = document.createElement('span')
+		label.className = 'push115-directory-label'
+		label.textContent = item.path || item.name || `CID:${item.cid}`
+		const cid = document.createElement('small')
+		cid.className = 'push115-directory-cid'
+		cid.textContent = `CID ${item.cid}`
+		const button = document.createElement('button')
+		button.type = 'button'
+		button.className = 'push115-directory-pick'
+		button.textContent = selected.has(item.cid) ? t('directory_scan_remove') : t('directory_scan_add')
+		button.addEventListener('click', () => toggleDirectory(item))
+		const scan = document.createElement('button')
+		scan.type = 'button'
+		scan.className = 'push115-directory-pick'
+		scan.textContent = t('directory_scan_children')
+		scan.addEventListener('click', () => void scanDirectoryRoot(item, scan))
+		row.append(label, cid, button, scan)
+		container.appendChild(row)
+	}
+}
+
+async function refreshDirectoryIndex() {
+	try {
+		const response = await sendMessage('GET_DIRECTORY_INDEX')
+		directoryIndex = response.index || directoryIndex
+		renderDirectoryIndex()
+	} catch (error) {
+		const status = document.getElementById('push115-directory-status')
+		if (status) status.textContent = t('directory_scan_failed') + (error?.message || error)
+	}
+}
+
+async function scanDirectories() {
+	const button = document.getElementById('push115-scan-directories')
+	if (button) button.disabled = true
+	try {
+		const response = await sendMessage('SCAN_DIRECTORIES', { roots: ['0'], maxDepth: 1 })
+		directoryIndex = response.index || directoryIndex
+		renderDirectoryIndex()
+		const status = document.getElementById('push115-directory-status')
+		if (status) status.textContent = replaceCount(
+			t('directory_scan_success').replace('{bridge}', directoryBridgeLabel(response)),
+			directoryIndex.directories?.length || 0,
+		)
+	} catch (error) {
+		const status = document.getElementById('push115-directory-status')
+		if (status) status.textContent = t('directory_scan_failed') + (error?.message || error)
+	} finally {
+		if (button) button.disabled = false
+	}
+}
+
+async function scanDirectoryRoot(item, button) {
+	if (!item?.cid) return
+	if (button) button.disabled = true
+	try {
+		const response = await sendMessage('SCAN_DIRECTORIES', { roots: [item.cid], maxDepth: 32 })
+		directoryIndex = response.index || directoryIndex
+		renderDirectoryIndex()
+		const status = document.getElementById('push115-directory-status')
+		if (status) status.textContent = replaceCount(
+			t('directory_scan_success').replace('{bridge}', directoryBridgeLabel(response)),
+			directoryIndex.directories?.length || 0,
+		)
+	} catch (error) {
+		const status = document.getElementById('push115-directory-status')
+		if (status) status.textContent = t('directory_scan_failed') + (error?.message || error)
+	} finally {
+		if (button) button.disabled = false
+	}
 }
 
 function sendMessage(action, details = {}) {
@@ -265,6 +409,7 @@ function applyLocale() {
 	document.querySelectorAll('[data-placeholder]').forEach(element => {
 		element.placeholder = t(element.dataset.placeholder)
 	})
+	if (typeof renderDirectoryIndex === 'function') renderDirectoryIndex()
 }
 
 function renderSavePathSelectors(preserveSiteProfiles = false, selectedCidOverride = undefined, bridgeCidOverride = undefined) {
@@ -448,6 +593,7 @@ function bindEvents() {
 	document.getElementById('push115-settings-form').addEventListener('submit', saveSettings)
 	document.getElementById('push115-reset-settings').addEventListener('click', resetSettings)
 	document.getElementById('push115-save-dirs-input').addEventListener('change', () => renderSavePathSelectors(true))
+	document.getElementById('push115-scan-directories').addEventListener('click', () => void scanDirectories())
 	document.getElementById('push115-refresh-logs').addEventListener('click', Push115.OptionsTasks.refresh)
 	document.getElementById('push115-clear-logs').addEventListener('click', Push115.OptionsTasks.clearLogs)
 	document.getElementById('push115-complete-reset').addEventListener('click', Push115.OptionsTasks.completeReset)
@@ -466,6 +612,10 @@ function bindEvents() {
 
 	chrome.storage.onChanged.addListener((changes, area) => {
 		if (area !== 'local') return
+		if (changes[DIRECTORY_INDEX_KEY]) {
+			directoryIndex = changes[DIRECTORY_INDEX_KEY].newValue || directoryIndex
+			renderDirectoryIndex()
+		}
 		let changed = false
 		for (const key of Object.values(CONFIG_KEYS)) {
 			if (!Object.prototype.hasOwnProperty.call(changes, key)) continue
@@ -491,6 +641,7 @@ async function init() {
 	applyLocale()
 	fillForm()
 	bindEvents()
+	await refreshDirectoryIndex()
 	await Push115.OptionsTasks.refresh()
 	setInterval(Push115.OptionsTasks.refresh, 5000)
 }

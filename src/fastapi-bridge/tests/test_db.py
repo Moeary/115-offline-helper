@@ -271,6 +271,63 @@ def test_v1_database_migrates_without_losing_jobs_or_events(tmp_path) -> None:
         store.close()
 
 
+def test_directory_registry_is_persisted_as_safe_bridge_state(tmp_path) -> None:
+    path = tmp_path / "directories.sqlite3"
+    registry = {
+        "schema": 1,
+        "revision": 7,
+        "scannedAt": 1700000000000,
+        "roots": ["0"],
+        "directories": [
+            {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+            {"cid": "9", "parentCid": "0", "name": "动画", "path": "/动画", "depth": 1},
+        ],
+    }
+    store = QueueStore(path)
+    try:
+        assert store.set_directory_registry(registry) == registry
+        assert store.get_directory_registry() == registry
+        row = store._connection.execute(
+            "SELECT state_key, state_value FROM bridge_state WHERE state_key = ?",
+            ("directory_registry.v1",),
+        ).fetchone()
+        assert row[0] == "directory_registry.v1"
+        assert row[1].startswith("{")
+    finally:
+        store.close()
+
+    reopened = QueueStore(path)
+    try:
+        assert reopened.get_directory_registry() == registry
+    finally:
+        reopened.close()
+
+
+def test_directory_registry_rejects_unsafe_json_before_persistence() -> None:
+    store = QueueStore(":memory:")
+    try:
+        with pytest.raises(ValueError):
+            store.set_directory_registry(
+                {
+                    "schema": 1,
+                    "revision": 1,
+                    "scannedAt": 1,
+                    "roots": ["0"],
+                    "directories": [
+                        {
+                            "cid": "1",
+                            "name": "bad",
+                            "path": "/../bad",
+                            "depth": 0,
+                        }
+                    ],
+                }
+            )
+        assert store.get_directory_registry() is None
+    finally:
+        store.close()
+
+
 def test_retry_clones_failed_job_and_request_id_is_idempotent() -> None:
     store = QueueStore(":memory:")
     try:

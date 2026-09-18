@@ -31,6 +31,7 @@ from .schemas import (
     ActionCommandRequest,
     ActionEventRequest,
     ClaimRequest,
+    DirectoryRegistryRequest,
     EventRequest,
 )
 from .telegram import HttpTelegramTransport, TelegramService
@@ -138,6 +139,15 @@ def _decode_cursor(value: str | None) -> tuple[float, str] | None:
     return timestamp, job_id
 
 
+def _directory_registry_revision(registry: Any) -> int | None:
+    if not isinstance(registry, dict):
+        return None
+    value = registry.get("revision")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -233,7 +243,7 @@ def create_app(
             CORSMiddleware,
             allow_origins=list(settings.cors_origins),
             allow_credentials=False,
-            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_methods=["GET", "POST", "PUT", "OPTIONS"],
             allow_headers=["Accept", "Authorization", "Content-Type"],
             max_age=600,
         )
@@ -254,6 +264,68 @@ def create_app(
     @app.get("/v1/health")
     async def v1_health(_auth: None = Depends(require_auth)) -> dict[str, Any]:
         return {"schema": 1, "ok": True}
+
+    @app.get("/v1/runtime/directories")
+    async def get_directory_registry(
+        _auth: None = Depends(require_auth),
+    ) -> dict[str, Any]:
+        getter = getattr(queue, "get_directory_registry", None)
+        registry = getter() if callable(getter) else None
+        return {
+            "schema": 1,
+            "registry": registry,
+            "revision": _directory_registry_revision(registry),
+        }
+
+    @app.put("/v1/runtime/directories")
+    async def put_directory_registry(
+        payload: DirectoryRegistryRequest,
+        _auth: None = Depends(require_auth),
+    ) -> dict[str, Any]:
+        incoming = payload.model_dump(by_alias=True)
+        getter = getattr(queue, "get_directory_registry", None)
+        current = getter() if callable(getter) else None
+        current_revision = _directory_registry_revision(current)
+        if current_revision is not None:
+            if payload.revision < current_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "directory_registry_stale",
+                        "message": "directory registry revision 已过期",
+                        "revision": current_revision,
+                    },
+                )
+            if payload.revision == current_revision:
+                if current == incoming:
+                    return {
+                        "schema": 1,
+                        "registry": current,
+                        "revision": current_revision,
+                        "idempotent": True,
+                    }
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "directory_registry_revision_conflict",
+                        "message": "相同 revision 的 directory registry 内容不同",
+                        "revision": current_revision,
+                    },
+                )
+        setter = getattr(queue, "set_directory_registry", None)
+        if not callable(setter):
+            raise HTTPException(status_code=503, detail="directory registry 不可用")
+        try:
+            stored = setter(incoming)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return {
+            "schema": 1,
+            "registry": stored,
+            "revision": payload.revision,
+            "updated": True,
+            "idempotent": False,
+        }
 
     @app.get("/v1/jobs")
     async def list_jobs(

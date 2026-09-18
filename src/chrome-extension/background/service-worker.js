@@ -8,6 +8,7 @@ importScripts(
 	'api/offline.js',
 	'api/files.js',
 	'tasks/folders.js',
+	'directory-index.js',
 	'tasks/anime-library.js',
 	'tasks/store.js',
 	'processors/cleanup.js',
@@ -28,6 +29,7 @@ async function initialize() {
 	await background.ContentScripts.syncAndInject()
 	await background.TaskMonitor.ensureAlarm()
 	await background.BridgeClient.syncConfig()
+	void background.DirectoryIndex.syncStored()
 	void background.TaskMonitor.processPending()
 	void background.BridgeClient.processPending()
 }
@@ -44,6 +46,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 	if (changes[configKeys.AUTO_DETECT] || changes[configKeys.SITE_PROFILES]) void background.ContentScripts.sync()
 	if (changes[configKeys.BRIDGE_ENABLED] || changes[configKeys.BRIDGE_TOKEN] || changes[configKeys.BRIDGE_TARGET_CID]) {
 		void background.BridgeClient.syncConfig()
+		if (changes[configKeys.BRIDGE_ENABLED]?.newValue === true || changes[configKeys.BRIDGE_TOKEN]?.newValue) {
+			void background.DirectoryIndex.syncStored()
+		}
 		if (changes[configKeys.BRIDGE_ENABLED]?.newValue === true || changes[configKeys.BRIDGE_TOKEN]?.newValue) {
 			void background.BridgeClient.processPending()
 		}

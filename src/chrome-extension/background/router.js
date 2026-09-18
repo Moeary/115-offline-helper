@@ -166,6 +166,16 @@
 						return { success: true, tasks: await background.TaskStore.read() }
 					case 'GET_ANIME_SERIES':
 						return { success: true, binding: await background.AnimeLibrary.get(details.key) }
+					case 'GET_DIRECTORY_INDEX':
+						return { success: true, index: await background.DirectoryIndex.read() }
+					case 'SCAN_DIRECTORIES':
+						return { success: true, ...(await background.DirectoryIndex.scan(details)) }
+					case 'SYNC_DIRECTORY_INDEX':
+						return { success: true, ...(await background.DirectoryIndex.syncStored()) }
+					case 'RESOLVE_DIRECTORY_PATH':
+						return { success: true, cid: await background.DirectoryIndex.resolvePath(details.path) }
+					case 'RESOLVE_DIRECTORY_CID':
+						return { success: true, path: await background.DirectoryIndex.resolveCid(details.cid) }
 					case 'PREPARE_ANIME_SERIES':
 						return { success: true, target: await background.AnimeLibrary.prepare(details) }
 					case 'CLEAR_LOGS':

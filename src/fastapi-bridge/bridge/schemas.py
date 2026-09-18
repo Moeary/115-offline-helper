@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
-import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 from .normalize import is_ed2k, is_magnet, normalize_code, parse_ed2k
 
@@ -70,6 +78,177 @@ def _validate_bounded_json(value: Any, *, field_name: str) -> Any:
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+_DIRECTORY_CID = re.compile(r"(?:0|[1-9][0-9]{0,63})\Z")
+_DIRECTORY_MAX_ENTRIES = 5000
+_DIRECTORY_MAX_ROOTS = 32
+_DIRECTORY_MAX_NAME = 256
+_DIRECTORY_MAX_PATH = 4096
+_DIRECTORY_MAX_PAYLOAD_BYTES = 1024 * 1024
+
+
+def _directory_cid(value: Any, *, field_name: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise ValueError(f"{field_name} 必须是十进制字符串 CID")
+    value = value.strip()
+    if not _DIRECTORY_CID.fullmatch(value):
+        raise ValueError(f"{field_name} 必须是无前导零的十进制 CID")
+    return value
+
+
+def _directory_name(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("目录 name 必须是字符串")
+    value = value.strip()
+    if not value or len(value) > _DIRECTORY_MAX_NAME:
+        raise ValueError(f"目录 name 长度必须在 1 到 {_DIRECTORY_MAX_NAME} 之间")
+    if any(
+        ord(character) < 0x20
+        or ord(character) == 0x7F
+        or 0xD800 <= ord(character) <= 0xDFFF
+        for character in value
+    ):
+        raise ValueError("目录 name 不得包含控制字符")
+    if value in {".", ".."} or "/" in value or "\\" in value:
+        raise ValueError("目录 name 不得包含路径分隔符")
+    return value
+
+
+def _directory_path(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("目录 path 必须是字符串")
+    value = value.strip()
+    if not value or len(value) > _DIRECTORY_MAX_PATH:
+        raise ValueError(f"目录 path 长度必须在 1 到 {_DIRECTORY_MAX_PATH} 之间")
+    if not value.startswith("/") or "\\" in value:
+        raise ValueError("目录 path 必须是安全的绝对路径")
+    if value == "/":
+        return value
+    parts = value[1:].split("/")
+    if any(not part or part in {".", ".."} for part in parts):
+        raise ValueError("目录 path 不得包含空段、. 或 .. 回退段")
+    if any(
+        any(
+            ord(character) < 0x20
+            or ord(character) == 0x7F
+            or 0xD800 <= ord(character) <= 0xDFFF
+            for character in part
+        )
+        for part in parts
+    ):
+        raise ValueError("目录 path 不得包含控制字符")
+    return value
+
+
+class DirectoryEntry(StrictModel):
+    """One browser-supplied 115 directory in the shared registry."""
+
+    cid: StrictStr = Field(..., min_length=1, max_length=64)
+    parent_cid: StrictStr | None = Field(
+        None, alias="parentCid", min_length=1, max_length=64
+    )
+    name: StrictStr = Field(..., min_length=1, max_length=_DIRECTORY_MAX_NAME)
+    path: StrictStr = Field(..., min_length=1, max_length=_DIRECTORY_MAX_PATH)
+    depth: StrictInt = Field(..., ge=0, le=32)
+
+    @field_validator("cid", mode="before")
+    @classmethod
+    def validate_cid(cls, value: Any) -> str:
+        return _directory_cid(value, field_name="目录 cid")
+
+    @field_validator("parent_cid", mode="before")
+    @classmethod
+    def validate_parent_cid(cls, value: Any) -> str | None:
+        if value is None or value == "":
+            return None
+        return _directory_cid(value, field_name="目录 parentCid")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def validate_name(cls, value: Any) -> str:
+        return _directory_name(value)
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def validate_path(cls, value: Any) -> str:
+        return _directory_path(value)
+
+    @model_validator(mode="after")
+    def validate_parent(self) -> "DirectoryEntry":
+        if self.parent_cid == self.cid:
+            raise ValueError("目录 parentCid 不得与 cid 相同")
+        return self
+
+
+class DirectoryRegistryRequest(StrictModel):
+    """Bounded, versioned directory snapshot uploaded by the extension."""
+
+    schema_version: Literal[1] = Field(1, alias="schema")
+    revision: StrictInt = Field(..., ge=0, le=2**63 - 1)
+    scanned_at: StrictInt = Field(..., alias="scannedAt", ge=0, le=2**63 - 1)
+    # Older producers use a list of root CIDs; accepting entry-shaped roots
+    # keeps the payload compatible with producers that expose root labels too.
+    roots: list[DirectoryEntry | StrictStr] = Field(
+        default_factory=list, max_length=_DIRECTORY_MAX_ROOTS
+    )
+    directories: list[DirectoryEntry] = Field(
+        default_factory=list, max_length=_DIRECTORY_MAX_ENTRIES
+    )
+
+    @field_validator("roots")
+    @classmethod
+    def validate_roots(
+        cls, value: list[DirectoryEntry | str]
+    ) -> list[DirectoryEntry | str]:
+        seen: set[str] = set()
+        normalized: list[DirectoryEntry | str] = []
+        for item in value:
+            if isinstance(item, DirectoryEntry):
+                cid = item.cid
+                normalized.append(item)
+            else:
+                cid = _directory_cid(item, field_name="roots")
+                normalized.append(cid)
+            if cid in seen:
+                raise ValueError(f"roots 含有重复 CID：{cid}")
+            seen.add(cid)
+        return normalized
+
+    @field_validator("directories")
+    @classmethod
+    def validate_directories(cls, value: list[DirectoryEntry]) -> list[DirectoryEntry]:
+        seen_cids: set[str] = set()
+        seen_paths: set[str] = set()
+        for item in value:
+            if item.cid in seen_cids:
+                raise ValueError(f"directories 含有重复 CID：{item.cid}")
+            if item.path in seen_paths:
+                raise ValueError(f"directories 含有重复 path：{item.path}")
+            seen_cids.add(item.cid)
+            seen_paths.add(item.path)
+        return value
+
+    @model_validator(mode="after")
+    def validate_size(self) -> "DirectoryRegistryRequest":
+        try:
+            encoded = json.dumps(
+                self.model_dump(by_alias=True),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError, OverflowError, UnicodeError):
+            raise ValueError("directory registry 不是有效 JSON") from None
+        if len(encoded) > _DIRECTORY_MAX_PAYLOAD_BYTES:
+            raise ValueError("directory registry 输入过大")
+        return self
+
+
+# Explicit aliases make the contract discoverable to callers that use either
+# the short entry name or the full registry terminology.
+DirectoryRegistryEntry = DirectoryEntry
+DirectoryRegistry = DirectoryRegistryRequest
 
 
 class IntentModel(StrictModel):

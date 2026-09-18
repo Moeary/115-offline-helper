@@ -38,6 +38,8 @@ class StateConflict(QueueError):
 TERMINAL_STATES = frozenset({"completed", "failed", "uncertain", "cancelled"})
 JOB_TERMINAL_STATES = TERMINAL_STATES
 ACTION_TERMINAL_STATES = frozenset({"applied", "failed", "uncertain", "noop"})
+DIRECTORY_REGISTRY_STATE_KEY = "directory_registry.v1"
+_DIRECTORY_REGISTRY_MAX_BYTES = 1024 * 1024
 STATE_TRANSITIONS = {
     # A browser can finish a very fast 115 submission before it has flushed
     # an explicit accepted event.  The event still carries the same lease and
@@ -1766,3 +1768,75 @@ class QueueStore:
                 """,
                 (str(key), str(value), _now()),
             )
+
+    def get_directory_registry(self) -> dict[str, Any] | None:
+        """Return the latest validated browser directory snapshot.
+
+        The registry is deliberately kept in ``bridge_state`` rather than a
+        second table: it is one replaceable JSON snapshot, not queue data that
+        needs relational queries.  A malformed legacy value is treated as an
+        unavailable snapshot so Telegram cannot act on untrusted state.
+        """
+
+        raw = self.get_state(DIRECTORY_REGISTRY_STATE_KEY)
+        if raw is None:
+            return None
+        try:
+            value = json.loads(raw)
+            from .schemas import DirectoryRegistryRequest
+
+            validated = DirectoryRegistryRequest.model_validate(value)
+            encoded = json.dumps(
+                validated.model_dump(by_alias=True),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded) > _DIRECTORY_REGISTRY_MAX_BYTES:
+                return None
+            return validated.model_dump(by_alias=True)
+        except (TypeError, ValueError, OverflowError, UnicodeError, json.JSONDecodeError):
+            return None
+
+    def set_directory_registry(
+        self, registry: Mapping[str, Any] | Any
+    ) -> dict[str, Any]:
+        """Validate and durably replace the browser directory snapshot."""
+
+        try:
+            from .schemas import DirectoryRegistryRequest
+
+            if isinstance(registry, DirectoryRegistryRequest):
+                validated = registry
+            else:
+                validated = DirectoryRegistryRequest.model_validate(registry)
+            value = validated.model_dump(by_alias=True)
+            encoded = json.dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (
+            TypeError,
+            ValueError,
+            OverflowError,
+            UnicodeError,
+            json.JSONDecodeError,
+        ) as error:
+            raise ValueError("directory registry 不是安全的 JSON 快照") from error
+        if len(encoded) > _DIRECTORY_REGISTRY_MAX_BYTES:
+            raise ValueError("directory registry 输入过大")
+        with self._lock:
+            self._connection.execute(
+                """
+                INSERT INTO bridge_state (state_key, state_value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    state_value = excluded.state_value,
+                    updated_at = excluded.updated_at
+                """,
+                (DIRECTORY_REGISTRY_STATE_KEY, encoded.decode("utf-8"), _now()),
+            )
+        return value

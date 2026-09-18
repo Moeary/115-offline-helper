@@ -166,6 +166,83 @@ h3 {
 	line-height: 1.5;
 }
 
+.push115-directory-browser {
+	margin-top: 12px;
+	padding: 13px;
+	border: 1px solid rgba(20, 33, 61, 0.1);
+	border-radius: 11px;
+	background: #fbfcfe;
+}
+
+.push115-directory-browser-heading {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.push115-directory-browser-heading p {
+	margin-top: 5px;
+	color: #858992;
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+.push115-directory-index {
+	display: grid;
+	gap: 5px;
+	max-height: 280px;
+	margin-top: 11px;
+	overflow: auto;
+}
+
+.push115-directory-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto auto auto;
+	align-items: center;
+	gap: 9px;
+	min-height: 32px;
+	padding: 5px 7px 5px calc(7px + (var(--push115-directory-depth, 0) * 16px));
+	border-radius: 7px;
+	background: rgba(0, 122, 255, 0.035);
+}
+
+.push115-directory-row:hover {
+	background: rgba(0, 122, 255, 0.09);
+}
+
+.push115-directory-label {
+	min-width: 0;
+	font-size: 12px;
+	line-height: 1.35;
+	word-break: break-word;
+}
+
+.push115-directory-cid {
+	color: #9297a0;
+	font-family: "SF Mono", Monaco, Consolas, monospace;
+	font-size: 10px;
+}
+
+.push115-directory-pick {
+	padding: 5px 8px;
+	border: 0;
+	border-radius: 7px;
+	background: rgba(0, 122, 255, 0.1);
+	color: #0066cc;
+	font-size: 11px;
+	cursor: pointer;
+}
+
+.push115-directory-empty {
+	padding: 12px 7px;
+	border: 1px dashed rgba(20, 33, 61, 0.14);
+	border-radius: 8px;
+	color: #858992;
+	font-size: 11px;
+	line-height: 1.45;
+}
+
 .push115-divider {
 	height: 1px;
 	margin: 20px 0;
@@ -549,7 +626,8 @@ body.dark-theme .push115-divider {
 }
 
 body.dark-theme .push115-toggle,
-body.dark-theme .push115-task-card {
+body.dark-theme .push115-task-card,
+body.dark-theme .push115-directory-browser {
 	border-color: rgba(255, 255, 255, 0.11);
 	background: #1b1e22;
 }
@@ -566,6 +644,15 @@ body.dark-theme .push115-log-entry span {
 }
 
 body.dark-theme .push115-log-empty {
+	border-color: rgba(255, 255, 255, 0.14);
+	color: #969ca7;
+}
+
+body.dark-theme .push115-directory-row {
+	background: rgba(80, 160, 255, 0.09);
+}
+
+body.dark-theme .push115-directory-empty {
 	border-color: rgba(255, 255, 255, 0.14);
 	color: #969ca7;
 }

@@ -83,6 +83,94 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _directory_payload(revision: int = 1, *, name: str = "根目录") -> dict:
+    return {
+        "schema": 1,
+        "revision": revision,
+        "scannedAt": 1700000000000 + revision,
+        "roots": ["0"],
+        "directories": [
+            {"cid": "0", "parentCid": None, "name": name, "path": "/", "depth": 0},
+            {
+                "cid": "9",
+                "parentCid": "0",
+                "name": "动画",
+                "path": "/动画",
+                "depth": 1,
+            },
+        ],
+    }
+
+
+def test_directory_registry_requires_auth_persists_and_rejects_old_revision() -> None:
+    token = "d" * 32
+    store = QueueStore(":memory:")
+    app = create_app(_settings(token), store=store, provider=object())
+    try:
+        with TestClient(app) as client:
+            assert client.get("/v1/runtime/directories").status_code == 401
+            assert client.put(
+                "/v1/runtime/directories", json=_directory_payload()
+            ).status_code == 401
+
+            first = client.put(
+                "/v1/runtime/directories",
+                headers=_auth(token),
+                json=_directory_payload(),
+            )
+            assert first.status_code == 200
+            assert first.json()["revision"] == 1
+            assert first.json()["updated"] is True
+
+            repeated = client.put(
+                "/v1/runtime/directories",
+                headers=_auth(token),
+                json=_directory_payload(),
+            )
+            assert repeated.status_code == 200
+            assert repeated.json()["idempotent"] is True
+
+            current = client.get(
+                "/v1/runtime/directories", headers=_auth(token)
+            )
+            assert current.status_code == 200
+            assert current.json()["revision"] == 1
+            assert current.json()["registry"]["directories"][1]["cid"] == "9"
+
+            newer = client.put(
+                "/v1/runtime/directories",
+                headers=_auth(token),
+                json=_directory_payload(2, name="根目录新版"),
+            )
+            assert newer.status_code == 200
+            stale = client.put(
+                "/v1/runtime/directories",
+                headers=_auth(token),
+                json=_directory_payload(1, name="旧快照"),
+            )
+            assert stale.status_code == 409
+            assert stale.json()["detail"]["code"] == "directory_registry_stale"
+
+            invalid = client.put(
+                "/v1/runtime/directories",
+                headers=_auth(token),
+                json={
+                    **_directory_payload(3),
+                    "directories": [
+                        {
+                            "cid": "01",
+                            "name": "非法",
+                            "path": "/非法",
+                            "depth": 0,
+                        }
+                    ],
+                },
+            )
+            assert invalid.status_code == 422
+    finally:
+        store.close()
+
+
 def test_cursor_accepts_only_canonical_padding_and_numeric_timestamp() -> None:
     unpadded = _encode_cursor((12.5, "job")) or ""
     expected_padding = "=" * (-len(unpadded) % 4)

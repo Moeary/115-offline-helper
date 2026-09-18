@@ -302,7 +302,8 @@
 		const rawPath = String(path || '')
 		const jobEventPath = /^\/v1\/jobs\/[^\/?#]+\/events$/
 		const actionEventPath = /^\/v1\/actions\/[^\/?#]+\/events$/
-		if (rawPath !== '/v1/jobs/claim' && rawPath !== '/v1/actions/claim' && !jobEventPath.test(rawPath) && !actionEventPath.test(rawPath)) {
+		const directoryRegistryPath = '/v1/runtime/directories'
+		if (rawPath !== '/v1/jobs/claim' && rawPath !== '/v1/actions/claim' && rawPath !== directoryRegistryPath && !jobEventPath.test(rawPath) && !actionEventPath.test(rawPath)) {
 			throw bridgeError('bridge 路径无效', 'BRIDGE_INVALID_PATH')
 		}
 		let url
@@ -313,10 +314,26 @@
 		return url.toString()
 	}
 
-	async function requestJson(path, body, token) {
+	async function requestJson(path, body, token, method = 'POST') {
 		const auth = String(token || '').trim()
 		if (!auth) throw bridgeError('未配置 bridge Bearer token', 'BRIDGE_TOKEN_MISSING')
 		const url = bridgeUrl(path)
+		const requestMethod = String(method || 'POST').trim().toUpperCase()
+		if (!['GET', 'POST', 'PUT'].includes(requestMethod)) throw bridgeError('bridge 请求方法无效', 'BRIDGE_INVALID_METHOD')
+		const headers = {
+			Accept: 'application/json',
+			Authorization: `Bearer ${auth}`,
+		}
+		if (requestMethod !== 'GET' && body !== undefined && body !== null) headers['Content-Type'] = 'application/json'
+		const requestOptions = {
+			method: requestMethod,
+			headers,
+			credentials: 'omit',
+			redirect: 'error',
+			referrerPolicy: 'no-referrer',
+			cache: 'no-store',
+			...(requestMethod !== 'GET' && body !== undefined && body !== null ? { body: JSON.stringify(body) } : {}),
+		}
 		let response
 		let controller = null
 		let timeoutId = null
@@ -330,20 +347,7 @@
 			controller = null
 		}
 		try {
-			response = await fetch(url, {
-				method: 'POST',
-				headers: {
-					Accept: 'application/json',
-					'Content-Type': 'application/json',
-					Authorization: `Bearer ${auth}`,
-				},
-				body: JSON.stringify(body),
-				credentials: 'omit',
-				redirect: 'error',
-				referrerPolicy: 'no-referrer',
-				cache: 'no-store',
-				...(controller ? { signal: controller.signal } : {}),
-			})
+			response = await fetch(url, { ...requestOptions, ...(controller ? { signal: controller.signal } : {}) })
 			// Keep the abort timer alive through response.text()/response.json().
 			// Fetch resolves as soon as headers arrive, while a broken local bridge
 			// can leave the body stream pending indefinitely.
@@ -1414,6 +1418,24 @@
 		return false
 	}
 
+	async function syncDirectoryRegistry(index, bridgeConfig = null) {
+		const config = bridgeConfig || await readConfig()
+		if (!config.enabled || !config.token) return { disabled: true }
+		if (!await hasPermission()) return { permission: false }
+		const normalized = typeof background.DirectoryIndex?.normalizeIndex === 'function'
+			? background.DirectoryIndex.normalizeIndex(index)
+			: index
+		const result = await requestJson('/v1/runtime/directories', {
+			schema: 1,
+			revision: Number(normalized?.revision) || 0,
+			scannedAt: Number(normalized?.scannedAt) || 0,
+			roots: Array.isArray(normalized?.roots) ? normalized.roots : ['0'],
+			directories: Array.isArray(normalized?.directories) ? normalized.directories : [],
+		}, config.token, 'PUT')
+		if (!result || result.schema !== 1) throw bridgeError('目录 registry 响应格式无效', 'BRIDGE_INVALID_DIRECTORY_REGISTRY', { uncertain: true })
+		return result
+	}
+
 	async function processPending() {
 		if (running) return { skipped: true, running: true }
 		running = true
@@ -1512,6 +1534,7 @@
 		executeClaimedAction,
 		processActions,
 		ensureAlarm,
+		syncDirectoryRegistry,
 		syncConfig,
 		processPending,
 		resetRuntime,

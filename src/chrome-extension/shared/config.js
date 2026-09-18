@@ -29,6 +29,7 @@
 		BRIDGE_OUTBOX: 'push115_bridge_outbox',
 		BRIDGE_ACTIONS: 'push115_bridge_actions',
 		BRIDGE_ACTION_OUTBOX: 'push115_bridge_action_outbox',
+		DIRECTORY_INDEX: 'push115_directory_index',
 	})
 
 	// The bridge deliberately has one fixed loopback endpoint.  Keeping this
