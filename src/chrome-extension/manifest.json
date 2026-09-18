@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "115 Offline Helper",
-  "version": "1.6.0",
+	"version": "1.7.0",
   "description": "Site-adapted magnet/ed2k submission and safe background processing for 115.com.",
   "permissions": [
     "storage",
@@ -16,6 +16,7 @@
   ],
   "optional_host_permissions": [
     "<all_urls>",
+	"http://127.0.0.1/*",
     "*://javbus.com/*",
     "*://*.javbus.com/*",
     "*://nyaa.si/*",

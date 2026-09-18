@@ -86,14 +86,15 @@
         <h2 id="en-3">3. Data Sharing and Disclosure</h2>
         <ul>
             <li>We do <strong>not</strong> sell, trade, or rent your data to anyone.</li>
-            <li>We do <strong>not</strong> transfer data to third-party servers, advertising platforms, data brokers, or information resellers.</li>
-            <li>We do <strong>not</strong> share data with any third party for any reason.</li>
-            <li>The <strong>only</strong> external communication is between your browser and 115.com servers (*.115.com), initiated solely to fulfill your download requests and manage your 115.com account.</li>
+            <li>We do <strong>not</strong> use your data for telemetry, advertising, marketing, profiling, or data brokerage.</li>
+            <li>115.com authentication cookies are never uploaded to the Local Bridge, Telegram, or any other service; they remain in the browser and are used only for 115.com requests.</li>
+            <li>If you explicitly enable Local Bridge with Telegram polling, the selected resource and task status are sent to the Telegram chats in your configured allowlist. The Extension also sends bridge job claims and status events only to the fixed local service at <code>http://127.0.0.1:52115</code>.</li>
+            <li>Required download and account requests go to 115.com servers (*.115.com). Optional Bridge and Telegram communication occurs only after you enable and configure those features.</li>
         </ul>
 
         <h2 id="en-4">4. Data Storage and Security</h2>
         <ul>
-            <li>All persistent data (settings, cached cookies) is stored <strong>locally</strong> in your browser using <code>chrome.storage.local</code>. This data never leaves your device except for API requests to 115.com.</li>
+            <li>All persistent Extension data (settings, cached cookies, bridge jobs and event receipts) is stored <strong>locally</strong> in your browser using <code>chrome.storage.local</code>. Cached 115 cookies leave the browser only in requests to 115.com; bridge requests contain no cookies.</li>
             <li>All network communication with 115.com uses <strong>HTTPS</strong> encryption.</li>
             <li>Authentication cookies are only used for their intended purpose (115.com API authentication) and are never exposed to other services.</li>
             <li>The Extension does not use any remote servers, databases, or cloud storage controlled by the developer.</li>
@@ -130,7 +131,7 @@
         <p>We follow the <strong>principle of least privilege</strong>: we only request the minimum permissions necessary for the Extension to function. The broadest permission (<code>&lt;all_urls&gt;</code>) is optional and requires explicit user consent.</p>
 
         <h2 id="en-8">8. Network Requests</h2>
-        <p>The Extension communicates <strong>only</strong> with 115.com and its subdomains (*.115.com). Specifically:</p>
+        <p>The Extension communicates with 115.com and its subdomains (*.115.com). When Local Bridge is explicitly enabled, it also communicates with the fixed local service at <code>http://127.0.0.1:52115</code>:</p>
         <table>
             <tr><th>Endpoint Domain</th><th>Purpose</th></tr>
             <tr><td>my.115.com</td><td>Check login status</td></tr>
@@ -138,15 +139,18 @@
             <tr><td>passportapi.115.com</td><td>QR code login polling</td></tr>
             <tr><td>webapi.115.com</td><td>Submit offline download tasks, manage files (move, rename, delete)</td></tr>
             <tr><td>proapi.115.com</td><td>Alternative API endpoints for file operations</td></tr>
+            <tr><td>127.0.0.1:52115</td><td>Optional local Bridge job claims and status events</td></tr>
+            <tr><td>Configured JavBus host (Bridge)</td><td>Optional Telegram `/av` metadata and cover lookup</td></tr>
+            <tr><td>api.telegram.org (Bridge)</td><td>Optional delivery of selected resources and task status to allowlisted chats</td></tr>
         </table>
-        <p>No data is ever sent to any server other than those listed above. All requests use <strong>HTTPS</strong>.</p>
+        <p>The Extension makes requests only to the endpoints listed above. 115.com, JavBus and Telegram requests use <strong>HTTPS</strong>; the Bridge endpoint is loopback HTTP and remains on this device. Bridge and Telegram rows apply only when those optional features are enabled.</p>
 
         <h2 id="en-9">9. Limited Use Disclosure</h2>
         <p>In compliance with the <a href="https://developer.chrome.com/docs/webstore/program-policies/limited-use/" target="_blank" rel="noopener">Chrome Web Store User Data Policy</a>:</p>
         <ul>
             <li>The Extension's use of information received from Chrome APIs adheres to the Chrome Web Store User Data Policy, including the Limited Use requirements.</li>
             <li>Data obtained through the Extension is used <strong>solely</strong> to provide and improve the Extension's single purpose: detecting magnet/ed2k links and submitting them to 115.com for offline download.</li>
-            <li>We do <strong>not</strong> transfer user data to third parties except as necessary to provide the Extension's functionality (i.e., communication with 115.com).</li>
+            <li>We do <strong>not</strong> transfer user data to third parties except as necessary to provide the Extension's functionality (communication with 115.com and, when explicitly enabled, the local Bridge and allowlisted Telegram chats).</li>
             <li>We do <strong>not</strong> use or transfer user data for serving advertisements.</li>
             <li>We do <strong>not</strong> use or transfer user data to determine creditworthiness or for lending purposes.</li>
             <li>We do <strong>not</strong> sell user data.</li>
@@ -216,14 +220,15 @@
         <h2 id="zh-3">3. 数据共享与披露</h2>
         <ul>
             <li>我们<strong>不会</strong>向任何人出售、交易或出租您的数据。</li>
-            <li>我们<strong>不会</strong>将数据传输至第三方服务器、广告平台、数据代理商或信息转售商。</li>
-            <li>我们<strong>不会</strong>以任何理由与任何第三方共享数据。</li>
-            <li><strong>唯一</strong>的外部通信发生在您的浏览器和 115.com 服务器 (*.115.com) 之间，仅用于执行您的下载请求和管理您的 115.com 账户。</li>
+            <li>我们<strong>不会</strong>将您的数据用于遥测、广告、营销、用户画像或数据经纪。</li>
+            <li>115.com 认证 Cookie<strong>不会</strong>上传给本地 Bridge、Telegram 或其他服务；它们留在浏览器中，仅用于 115.com 请求。</li>
+            <li>若您主动启用本地 Bridge 并开启 Telegram 轮询，所选资源和任务状态会发送到您配置的允许聊天；扩展只向固定的本机服务 <code>http://127.0.0.1:52115</code> 发送任务领取和状态事件。</li>
+            <li>下载和账户请求发送到 115.com 服务器 (*.115.com)；本地 Bridge 与 Telegram 仅在您主动启用并配置后通信。</li>
         </ul>
 
         <h2 id="zh-4">4. 数据存储与安全</h2>
         <ul>
-            <li>所有持久化数据（设置、缓存的 Cookie）均使用 <code>chrome.storage.local</code> 存储在您的浏览器<strong>本地</strong>。除了向 115.com 发送 API 请求外，数据不会离开您的设备。</li>
+            <li>所有扩展持久化数据（设置、缓存的 Cookie、Bridge 任务和事件回执）均使用 <code>chrome.storage.local</code> 存储在您的浏览器<strong>本地</strong>。缓存的 115 Cookie 只会随请求发送到 115.com；Bridge 请求不携带 Cookie。</li>
             <li>与 115.com 的所有网络通信均使用 <strong>HTTPS</strong> 加密。</li>
             <li>认证 Cookie 仅用于其预期目的（115.com API 认证），不会暴露给其他服务。</li>
             <li>本扩展不使用任何由开发者控制的远程服务器、数据库或云存储。</li>
@@ -260,7 +265,7 @@
         <p>我们遵循<strong>最小权限原则</strong>：仅请求扩展功能所需的最低权限。最广泛的权限（<code>&lt;all_urls&gt;</code>）为可选权限，需要用户明确同意。</p>
 
         <h2 id="zh-8">8. 网络请求</h2>
-        <p>本扩展<strong>仅</strong>与 115.com 及其子域名 (*.115.com) 通信。具体如下：</p>
+        <p>本扩展与 115.com 及其子域名 (*.115.com) 通信；主动启用本地服务连接后，还会与固定的本机服务 <code>http://127.0.0.1:52115</code> 通信：</p>
         <table>
             <tr><th>端点域名</th><th>用途</th></tr>
             <tr><td>my.115.com</td><td>检查登录状态</td></tr>
@@ -268,15 +273,18 @@
             <tr><td>passportapi.115.com</td><td>二维码登录轮询</td></tr>
             <tr><td>webapi.115.com</td><td>提交离线下载任务、管理文件（移动、重命名、删除）</td></tr>
             <tr><td>proapi.115.com</td><td>备用 API 端点，用于文件操作</td></tr>
+            <tr><td>127.0.0.1:52115</td><td>可选本地服务的任务领取和状态事件</td></tr>
+            <tr><td>配置的 JavBus 主机（Bridge）</td><td>可选 Telegram `/av` 元数据和封面查询</td></tr>
+            <tr><td>api.telegram.org（Bridge）</td><td>可选向允许聊天发送所选资源和任务状态</td></tr>
         </table>
-        <p>不会向上述以外的任何服务器发送数据。所有请求均使用 <strong>HTTPS</strong>。</p>
+        <p>扩展只向上表列出的端点请求数据。115.com、JavBus 和 Telegram 请求使用 <strong>HTTPS</strong>；Bridge 端点是留在本机的 loopback HTTP。Bridge 和 Telegram 行仅在对应可选功能启用时适用。</p>
 
         <h2 id="zh-9">9. 有限使用声明</h2>
         <p>根据 <a href="https://developer.chrome.com/docs/webstore/program-policies/limited-use/" target="_blank" rel="noopener">Chrome 网上应用店用户数据政策</a>：</p>
         <ul>
             <li>本扩展对通过 Chrome API 获得的信息的使用遵守 Chrome 网上应用店用户数据政策，包括有限使用要求。</li>
             <li>通过本扩展获得的数据<strong>仅</strong>用于提供和改进扩展的单一用途：检测 magnet/ed2k 链接并将其提交到 115.com 进行离线下载。</li>
-            <li>我们<strong>不会</strong>将用户数据传输给第三方，除非为提供扩展功能所必需（即与 115.com 通信）。</li>
+            <li>我们<strong>不会</strong>将用户数据传输给第三方，除非为提供扩展功能所必需（与 115.com 通信，以及主动启用时的本地 Bridge 和允许聊天）。</li>
             <li>我们<strong>不会</strong>将用户数据用于投放广告。</li>
             <li>我们<strong>不会</strong>将用户数据用于确定信用额度或贷款用途。</li>
             <li>我们<strong>不会</strong>出售用户数据。</li>

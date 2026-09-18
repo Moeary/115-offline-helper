@@ -12,3 +12,10 @@ __pycache__/
 *.user
 *.suo
 *.log
+
+# Local Telegram/bridge credentials, queue state and virtual environment
+bridge/.state/
+bridge/.venv/
+bridge/.env
+bridge/.testdeps/
+bridge/.testvenv/

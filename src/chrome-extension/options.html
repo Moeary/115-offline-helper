@@ -95,6 +95,35 @@
 						<div class="push115-divider"></div>
 
 						<div class="push115-rule-heading">
+							<h3 data-i18n="bridge_title">本地服务连接</h3>
+							<p data-i18n="bridge_subtitle">从本机服务领取候选任务并提交到 115。地址固定为 http://127.0.0.1:52115，不会读取网页 Cookie。</p>
+						</div>
+						<div class="push115-bridge-panel">
+							<label class="push115-toggle push115-bridge-enabled">
+								<input id="push115-bridge-enabled" type="checkbox" />
+								<span>
+									<strong data-i18n="bridge_enabled_label">启用本地服务连接</strong>
+									<small data-i18n="bridge_enabled_hint">启用后每 30 秒领取一次任务；关闭时不会请求本地服务。</small>
+								</span>
+							</label>
+							<div class="push115-field-grid">
+								<div class="push115-field">
+									<label for="push115-bridge-token" data-i18n="bridge_token_label">连接密钥</label>
+									<input id="push115-bridge-token" type="password" autocomplete="new-password" spellcheck="false" />
+									<p class="push115-hint" data-i18n="bridge_token_hint">密钥仅保存在本机，用于连接本地服务；115 登录信息留在浏览器。</p>
+								</div>
+								<div class="push115-field">
+									<label for="push115-bridge-target-cid" data-i18n="bridge_target_label">目标目录</label>
+									<select id="push115-bridge-target-cid"></select>
+									<p class="push115-hint" data-i18n="bridge_target_hint">领取的任务统一使用此 CID；未配置时使用根目录。</p>
+								</div>
+							</div>
+							<p id="push115-bridge-permission-hint" class="push115-hint push115-bridge-permission-hint" data-i18n="bridge_permission_hint">首次启用会请求 http://127.0.0.1/* 的可选权限。</p>
+						</div>
+
+						<div class="push115-divider"></div>
+
+						<div class="push115-rule-heading">
 							<h3 data-i18n="rules_title">文件扩展名规则</h3>
 							<p data-i18n="rules_subtitle">每行或用逗号分隔；扩展名可带或不带点。</p>
 						</div>

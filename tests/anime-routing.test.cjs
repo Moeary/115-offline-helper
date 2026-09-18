@@ -427,3 +427,278 @@ test('manual/generic source choosing anime still gets monitoring; profile overri
 	const overridden = intent(2, target); overridden.processorProfile = 'generic'
 	assert.equal((await e.bg.Router.submitIntent(overridden)).task.status, 'recorded')
 })
+
+test('direct JAV ED2K result uses a pre-submit snapshot and only moves the unique new file', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const targetCid = '10'
+	const old = e.file(targetCid, 'MNGS-060 restored.mp4', 'old-file'); old.s = 123
+	const fresh = e.file(targetCid, 'MNGS-060 restored.mp4', 'new-file'); fresh.s = 123
+	const task = {
+		taskId: 'direct-ed2k', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', code: 'MNGS-060',
+		remoteId: 'remote-direct', savePathCid: targetCid, expectedName: 'MNGS-060 restored.mp4', expectedSize: 123,
+		beforeSnapshot: { cid: targetCid, items: [{ fid: old.fid, name: old.n, size: old.s }] }, metadata: {}, createdAt: Date.now(),
+	}
+	e.context.remoteTasks = [{ info_hash: 'remote-direct', name: task.expectedName, status: 2 }]
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.deepEqual(e.calls.move, ['new-file'])
+	assert.deepEqual(e.calls.rename.at(-1), { fid: 'new-file', name: 'MNGS-060.mp4' })
+	assert.equal(e.tree.get(targetCid).items.some(item => item.fid === old.fid), true)
+	assert.equal(e.tree.get(targetCid).items.some(item => item.fid === fresh.fid), false)
+	assert.equal(e.tree.get(targetCid).items.find(item => item.fid === 'new-file'), undefined)
+	const destination = e.tree.get([...e.tree.keys()].find(cid => cid !== targetCid && e.tree.get(cid).name === 'MNGS-060'))
+	assert.ok(destination)
+	assert.equal(destination.items.find(item => item.fid === fresh.fid)?.n, 'MNGS-060.mp4')
+})
+
+test('direct JAV plan resumes from the recorded destination when a move checkpoint was missed', async () => {
+	const e = environment()
+	const target = await prepare(e)
+	const destination = e.folder(target.cid, 'MIDA-190', '501')
+	const file = e.file(destination, 'MIDA-190 restored.mp4', 'direct-file')
+	const task = {
+		taskId: 'direct-resume', processorProfile: 'jav', mediaType: 'jav', code: 'MIDA-190', savePathCid: target.cid,
+		expectedName: file.n, expectedSize: file.s, directFileId: file.fid,
+		directPlan: { version: 1, fid: file.fid, sourceCid: target.cid, currentCid: target.cid, destinationCid: destination, moved: false, renamed: false },
+		metadata: {},
+	}
+	await e.bg.Processors.jav.processDirect({ task, targetCid: target.cid, config: { push115_auto_organize: true }, appendLog: () => {}, checkpoint: async () => {} })
+	assert.equal(e.calls.move.length, 0)
+	assert.equal(e.tree.get(destination).items.find(item => item.fid === file.fid)?.n, 'MIDA-190.mp4')
+	assert.equal(task.directPlan.finished, true)
+})
+
+test('two unresolved same-name direct tasks refuse to claim one new file', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const name = 'MIDA-190 restored.mp4'
+	const file = e.file('10', name, 'ambiguous-file'); file.s = 123
+	const taskA = {
+		taskId: 'ambiguous-a', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k',
+		savePathCid: '10', expectedName: name, expectedSize: 123, expectedHash: '', beforeSnapshot: { cid: '10', items: [] },
+		createdAt: Date.now(), metadata: {},
+	}
+	const taskB = {
+		...taskA, taskId: 'ambiguous-b', createdAt: Date.now() + 1,
+	}
+	await e.bg.TaskStore.persist(taskA)
+	await e.bg.TaskStore.persist(taskB)
+	e.context.remoteTasks = [{ name, status: 2 }]
+	await assert.rejects(e.bg.TaskMonitor.processTask(taskA), /相同预期任务|无法唯一确认/)
+	assert.equal(taskA.status, 'waiting')
+	assert.equal(e.calls.move.length, 0)
+	assert.equal(e.calls.rename.length, 0)
+})
+
+test('a direct result with an explicit remote FID bypasses unresolved same-name ambiguity', async () => {
+	const e = environment()
+	const name = 'MIDA-190 restored.mp4'
+	const file = e.file('10', name, 'remote-fid'); file.s = 123
+	const taskA = {
+		taskId: 'remote-fid-a', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k',
+		savePathCid: '10', expectedName: name, expectedSize: 123, expectedHash: '', monitorDownload: true,
+		beforeSnapshot: { cid: '10', items: [] }, createdAt: Date.now(), metadata: {},
+	}
+	const taskB = { ...taskA, taskId: 'remote-fid-b', createdAt: Date.now() + 1 }
+	await e.bg.TaskStore.persist(taskA)
+	await e.bg.TaskStore.persist(taskB)
+	e.context.remoteTasks = [{ name, fid: file.fid, status: 2 }]
+	await e.bg.TaskMonitor.processTask(taskA)
+	assert.equal(taskA.status, 'completed')
+	assert.equal(taskA.directFileId, file.fid)
+	assert.equal(taskB.status, 'waiting')
+})
+
+test('another active task occupying a candidate FID prevents direct completion', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const name = 'MIDA-190 restored.mp4'
+	const file = e.file('10', name, 'occupied-fid'); file.s = 123
+	const taskA = {
+		taskId: 'occupied-a', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k',
+		savePathCid: '10', expectedName: name, expectedSize: 123, beforeSnapshot: { cid: '10', items: [] },
+		createdAt: Date.now(), metadata: {},
+	}
+	const taskB = {
+		...taskA, taskId: 'occupied-b', directFileId: file.fid, createdAt: Date.now() + 1,
+	}
+	await e.bg.TaskStore.persist(taskA)
+	await e.bg.TaskStore.persist(taskB)
+	e.context.remoteTasks = [{ name, status: 2 }]
+	await assert.rejects(e.bg.TaskMonitor.processTask(taskA), /未找到下载完成后的 115 目录|无法唯一确认/)
+	assert.equal(taskA.status, 'waiting')
+	assert.equal(e.calls.move.length, 0)
+})
+
+test('a snapshot CID mismatch is rejected while an explicitly persisted FID remains usable', async () => {
+	const mismatch = environment()
+	mismatch.data.push115_auto_organize = true
+	const mismatchTask = {
+		taskId: 'snapshot-mismatch', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k',
+		remoteId: 'snapshot-mismatch-remote', savePathCid: '10', expectedName: 'MIDA-190 restored.mp4', expectedSize: 123,
+		monitorDownload: true, beforeSnapshot: { cid: '99', items: [] }, createdAt: Date.now(), metadata: {},
+	}
+	mismatch.context.remoteTasks = [{ info_hash: mismatchTask.remoteId, name: mismatchTask.expectedName, status: 2 }]
+	await assert.rejects(mismatch.bg.TaskMonitor.processTask(mismatchTask), /快照与任务保存目录不一致/)
+
+	const e = environment()
+	const file = e.file('10', 'MIDA-190 restored.mp4', 'persisted-direct-fid'); file.s = 123
+	const task = {
+		taskId: 'persisted-direct-fid', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k',
+		remoteId: 'persisted-direct-remote', savePathCid: '10', expectedName: file.n, expectedSize: file.s,
+		monitorDownload: true, directFileId: file.fid,
+		beforeSnapshot: { cid: '10', items: [{ fid: file.fid, name: file.n, size: file.s }] }, createdAt: Date.now(), metadata: {},
+	}
+	e.context.remoteTasks = [{ info_hash: task.remoteId, name: task.expectedName, status: 2 }]
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.equal(task.directFileId, file.fid)
+})
+
+test('invalid breadcrumb and remote CID equal to save CID never invoke a processor', async () => {
+	for (const scenario of ['breadcrumb', 'save-cid']) {
+		const e = environment()
+		e.data.push115_auto_organize = true
+		const remoteCid = scenario === 'breadcrumb' ? 'missing-remote-cid' : '10'
+		if (scenario === 'breadcrumb') e.faults.fallback = remoteCid
+		const calls = { processor: 0 }
+		const original = e.bg.Processors.jav.process
+		e.bg.Processors.jav.process = async context => { calls.processor += 1; return original(context) }
+		const task = {
+			taskId: 'bad-folder-' + scenario, status: 'waiting', processorProfile: 'jav', mediaType: 'jav',
+			remoteId: 'remote-' + scenario, savePathCid: '10', expectedName: 'MIDA-190 restored.mp4',
+			monitorDownload: true, createdAt: Date.now(), metadata: {},
+		}
+		e.context.remoteTasks = [{ info_hash: task.remoteId, name: task.expectedName, file_id: remoteCid, status: 2 }]
+		await assert.rejects(e.bg.TaskMonitor.processTask(task), /未找到下载完成后的 115 目录|未明确定位/)
+		assert.equal(calls.processor, 0, scenario)
+		assert.equal(task.status, 'waiting')
+	}
+})
+
+test('monitorDownload completes a finished remote task when post-processing is disabled', async () => {
+	const e = environment()
+	const task = {
+		taskId: 'monitor-only', status: 'waiting', processorProfile: 'generic', mediaType: 'generic',
+		remoteId: 'monitor-remote', expectedName: 'finished.zip', monitorDownload: true,
+		savePathCid: '10', createdAt: Date.now(), metadata: {},
+	}
+	e.context.remoteTasks = [{ info_hash: task.remoteId, name: task.expectedName, status: 2 }]
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.equal(task.message, '115 离线下载完成')
+})
+
+test('same bridge job is submitted once while different bridge jobs remain separate', async () => {
+	const e = environment()
+	const base = { url: magnet(77), sourceSite: 'generic', mediaType: 'generic', processorProfile: 'generic', monitorDownload: true, savePathCid: '10' }
+	const [first, second] = await Promise.all([
+		e.bg.Router.submitIntent({ ...base, jobId: 'bridge-same' }),
+		e.bg.Router.submitIntent({ ...base, jobId: 'bridge-same' }),
+	])
+	assert.equal(e.calls.offline.length, 1)
+	assert.equal([first, second].filter(value => value.duplicate).length, 1)
+	const separateA = await e.bg.Router.submitIntent({ ...base, jobId: 'bridge-a' })
+	const separateB = await e.bg.Router.submitIntent({ ...base, jobId: 'bridge-b' })
+	assert.equal(e.calls.offline.length, 3)
+	const tasks = await e.bg.TaskStore.read()
+	assert.equal(tasks.length, 3)
+	assert.equal(new Set(tasks.map(task => task.jobId)).size, 3)
+	assert.equal(separateA.task.jobId, 'bridge-a')
+	assert.equal(separateB.task.jobId, 'bridge-b')
+})
+
+test('missing remote ID selects the unique exact-name task with matching metadata', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const name = 'MIDA-190 restored.mp4'
+	const file = e.file('10', name, 'metadata-match'); file.s = 123
+	const task = {
+		taskId: 'metadata-match', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k',
+		savePathCid: '10', expectedName: name, expectedSize: 123, monitorDownload: true,
+		beforeSnapshot: { cid: '10', items: [] }, createdAt: Date.now(), metadata: {},
+	}
+	e.context.remoteTasks = [
+		{ name, size: 999, fid: 'wrong-remote-fid', status: 2 },
+		{ name, size: 123, fid: file.fid, status: 2 },
+	]
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.equal(task.directFileId, file.fid)
+})
+
+test('missing remote ID refuses duplicate exact-name tasks instead of taking the first', async () => {
+	const e = environment()
+	const name = 'MIDA-190 restored.mp4'
+	const task = {
+		taskId: 'duplicate-remote-name', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k',
+		savePathCid: '10', expectedName: name, expectedSize: 123, monitorDownload: true,
+		createdAt: Date.now(), metadata: {},
+	}
+	e.context.remoteTasks = [
+		{ name, size: 123, status: 2 },
+		{ name, size: 123, status: 2 },
+	]
+	await assert.rejects(e.bg.TaskMonitor.processTask(task), /无法唯一确认对应的 115 任务/)
+	assert.equal(task.status, 'waiting')
+})
+
+test('remote info_hash and task_id aliases both match a task saved with task_id', async () => {
+	const e = environment()
+	const task = {
+		taskId: 'remote-alias', status: 'waiting', processorProfile: 'generic', mediaType: 'generic',
+		remoteId: 'remote-task-id', expectedName: 'finished.zip', monitorDownload: true,
+		savePathCid: '10', createdAt: Date.now(), metadata: {},
+	}
+	e.context.remoteTasks = [{ info_hash: 'remote-info-hash', task_id: task.remoteId, name: task.expectedName, status: 2 }]
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.equal(task.remoteId, 'remote-info-hash')
+})
+
+test('direct plan reads its recorded destination when the source CID is gone', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const targetCid = '10'
+	const destination = e.folder(targetCid, 'MIDA-190', '501')
+	const file = e.file(destination, 'MIDA-190 restored.mp4', 'source-gone-file')
+	const task = {
+		taskId: 'source-gone', status: 'waiting', processorProfile: 'jav', mediaType: 'jav', code: 'MIDA-190',
+		linkType: 'ed2k', savePathCid: targetCid, expectedName: file.n, expectedSize: file.s,
+		directPlan: {
+			version: 1, fid: file.fid, sourceCid: 'deleted-source-cid', currentCid: 'deleted-source-cid',
+			destinationCid: destination, moved: false, renamed: false,
+		}, metadata: {}, createdAt: Date.now(),
+	}
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.equal(e.tree.get(destination).items.find(item => item.fid === file.fid)?.n, 'MIDA-190.mp4')
+	assert.equal(task.directPlan.finished, true)
+})
+
+test('direct move rejects destination collisions with original or target name for both files and folders', async () => {
+	for (const collisionName of ['MIDA-190 restored.mp4', 'MIDA-190.mp4']) {
+		for (const kind of ['file', 'folder']) {
+			const e = environment()
+			const targetCid = '10'
+			const suffix = collisionName === 'MIDA-190.mp4' ? 'target-' : 'original-'
+			const destinationCid = kind === 'file' ? `51${collisionName.length}` : `52${collisionName.length}`
+			const sourceCid = kind === 'file' ? `61${collisionName.length}` : `62${collisionName.length}`
+			const destination = e.folder(targetCid, 'MIDA-190', destinationCid)
+			const source = e.folder(targetCid, 'incoming-' + suffix + kind, sourceCid)
+			const originalName = 'MIDA-190 restored.mp4'
+			const file = e.file(source, originalName, `collision-file-${suffix}${kind}`)
+			if (kind === 'file') e.file(destination, collisionName, `collision-existing-file-${suffix}`)
+			else e.folder(destination, collisionName, `collision-existing-folder-${suffix}`)
+			const task = {
+				taskId: `collision-${suffix}${kind}`, processorProfile: 'jav', mediaType: 'jav', code: 'MIDA-190',
+				savePathCid: targetCid, expectedName: originalName, expectedSize: file.s, metadata: {},
+				directPlan: { version: 1, fid: file.fid, sourceCid: source, currentCid: source, destinationCid: destination, moved: false, renamed: false },
+			}
+			await assert.rejects(e.bg.Processors.jav.processDirect({ task, targetCid, config: { push115_auto_organize: true }, appendLog: () => {}, checkpoint: async () => {} }), /目标文件名冲突/)
+			assert.equal(e.calls.move.length, 0, `${collisionName}/${kind}`)
+			assert.equal(e.tree.get(source).items.find(item => item.fid === file.fid)?.n, originalName)
+		}
+	}
+})

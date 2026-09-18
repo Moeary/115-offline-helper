@@ -19,15 +19,6 @@
 	const SHOW_TEXT = 4
 	const IGNORED_TAGS = new Set(['script', 'style', 'noscript', 'template'])
 	const ED2K_TEXT_PATTERN = /ed2k\s*:\s*\/\/\s*\|\s*file\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*\//gi
-	const CODE_TOKEN = /(?:^|[^A-Z0-9])((?:FC2[-_.\s]?(?:PPV[-_.\s]?)?\d{5,7}|[A-Z]{2,6}[-_.\s]?\d{2,5}(?:[-_.\s]?[A-Z])?))(?=$|[^A-Z0-9])/gi
-	// normalizeCode intentionally accepts a broad alphanumeric shape. South Plus
-	// titles also contain generic page/file vocabulary, so do not promote those
-	// known words to a JAV page code.
-	const NON_CODE_PREFIXES = new Set([
-		'AV', 'COM', 'ED2K', 'EP', 'FILE', 'FULL', 'H264', 'HD', 'HEVC', 'HTTP', 'HTTPS', 'JAV',
-		'KEYWORD', 'LADA', 'MKV', 'MP4', 'PAGE', 'PART', 'PLUS', 'PNG', 'READ', 'RESTORE', 'RESTORED',
-		'SAMPLE', 'SEASON', 'SOUTH', 'TEST', 'THREAD', 'TITLE', 'VIDEO', 'WEB', 'WWW',
-	])
 
 	function pageLocation() {
 		return global.location || {}
@@ -42,13 +33,8 @@
 			&& pathname === '/read.php'
 	}
 
-	function decodeFileName(value) {
-		try { return decodeURIComponent(String(value || '')) } catch (error) { return String(value || '') }
-	}
-
 	function extractEd2kFileName(url) {
-		const match = String(url || '').trim().match(/^ed2k:\/\/\|file\|([^|]*)\|/i)
-		return match ? decodeFileName(match[1]).trim() : ''
+		return global.Push115.DownloadIntent.parseEd2k(url)?.fileName || ''
 	}
 
 	function decodeHtmlEntities(value) {
@@ -178,27 +164,19 @@
 		const hashField = String(match?.[3] || '').replace(/\s+/g, '').trim()
 		if (!fileField || !sizeField || !hashField) return null
 		const url = `ed2k://|file|${fileField}|${sizeField}|${hashField}|/`
+		const parsed = global.Push115.DownloadIntent.parseEd2k(url)
+		if (!parsed) return null
 		return {
 			url,
-			fileName: extractEd2kFileName(url),
+			fileName: parsed.fileName,
+			size: parsed.size,
+			sizeText: parsed.sizeText,
+			hash: parsed.hash,
 		}
-	}
-
-	function isReliableCode(code) {
-		const prefix = String(code || '').split('-')[0]
-		return prefix === 'FC2'
-			|| (/^[A-Z]{3,6}$/.test(prefix) && !NON_CODE_PREFIXES.has(prefix))
 	}
 
 	function extractCode(values) {
-		const candidates = Array.isArray(values) ? values : [values]
-		for (const value of candidates) {
-			for (const match of String(value || '').matchAll(CODE_TOKEN)) {
-				const code = global.Push115.DownloadIntent.normalizeCode(match[1])
-				if (code && isReliableCode(code)) return code
-			}
-		}
-		return ''
+		return global.Push115.DownloadIntent.extractVideoCode(values)
 	}
 
 	function pageHeading() {
@@ -220,20 +198,28 @@
 	}
 
 	function addDiscoveredDownload(unique, page, { element, sourceElement, url, title, linkText, fileName, code, sourceType }) {
-		if (!global.Push115.DownloadIntent.isDownloadUrl(url)) return
+		const link = global.Push115.DownloadIntent.parseDownloadLink(url)
+		if (!link) return
 		const key = global.Push115.DownloadIntent.dedupeKey(url)
 		if (unique.has(key)) return
+		const resolvedFileName = fileName || link.fileName || ''
 		unique.set(key, {
 			key,
 			element,
 			sourceElement,
 			url,
-			title: title || fileName || linkText || page.title,
-			code: code || extractCode([fileName, linkText, page.title]),
+			title: title || resolvedFileName || linkText || page.title,
+			code: code || extractCode([resolvedFileName, linkText, page.title]),
+			linkType: link.linkType,
+			expectedName: link.fileName || '',
+			expectedSize: link.size || '',
+			expectedHash: link.hash || '',
 			metadata: {
 				...page,
-				fileName,
-				ed2kFileName: fileName,
+				fileName: resolvedFileName,
+				ed2kFileName: resolvedFileName,
+				ed2kSize: link.size || '',
+				ed2kHash: link.hash || '',
 				linkText,
 				...(sourceType ? { sourceType } : {}),
 			},

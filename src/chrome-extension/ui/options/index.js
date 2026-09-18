@@ -16,6 +16,9 @@ const CONFIG_KEYS = {
 	CLEAN_IMAGES: 'push115_clean_images',
 	CLEAN_NFO: 'push115_clean_nfo',
 	SITE_PROFILES: 'push115_site_profiles',
+	BRIDGE_ENABLED: 'push115_bridge_enabled',
+	BRIDGE_TOKEN: 'push115_bridge_token',
+	BRIDGE_TARGET_CID: 'push115_bridge_target_cid',
 }
 
 const DEFAULT_CONFIG = {
@@ -33,6 +36,9 @@ const DEFAULT_CONFIG = {
 	[CONFIG_KEYS.CLEAN_EXTENSIONS]: '',
 	[CONFIG_KEYS.CLEAN_IMAGES]: false,
 	[CONFIG_KEYS.CLEAN_NFO]: false,
+	[CONFIG_KEYS.BRIDGE_ENABLED]: false,
+	[CONFIG_KEYS.BRIDGE_TOKEN]: '',
+	[CONFIG_KEYS.BRIDGE_TARGET_CID]: '0',
 }
 
 const I18N_STRINGS = {
@@ -74,6 +80,17 @@ const I18N_STRINGS = {
 		clean_images_hint: '默认关闭；开启后，小于阈值的常见图片会进入回收候选。',
 		clean_nfo_label: '清理 NFO',
 		clean_nfo_hint: '默认关闭；开启后，小于阈值的 .nfo 会进入回收候选。',
+		bridge_title: '本地服务连接',
+		bridge_subtitle: '从本机服务领取候选任务并提交到 115。地址固定为 http://127.0.0.1:52115，不会读取网页 Cookie。',
+		bridge_enabled_label: '启用本地服务连接',
+		bridge_enabled_hint: '启用后每 30 秒领取一次任务；关闭时不会请求本地服务。',
+		bridge_token_label: '连接密钥',
+		bridge_token_hint: '密钥仅保存在本机，用于连接本地服务；115 登录信息留在浏览器。',
+		bridge_target_label: '目标目录',
+		bridge_target_hint: '领取的任务统一保存到此目录；未配置时使用根目录。',
+		bridge_permission_hint: '首次启用会请求 http://127.0.0.1/* 的可选权限。',
+		bridge_permission_denied: '未获得本地 Bridge 权限，Bridge 保持关闭。',
+		bridge_token_required: '启用 Bridge 前请填写 Bearer token。',
 		save_button: '保存设置',
 		reset_button: '恢复默认',
 		save_success: '设置已保存。',
@@ -87,8 +104,8 @@ const I18N_STRINGS = {
 		clear_logs_success: '日志已清空，保留 {count} 个进行中的任务。',
 		clear_logs_failed: '清空日志失败：',
 		complete_reset_button: '完全重置任务',
-		confirm_complete_reset: '确定完全重置扩展本地任务吗？这会清除全部任务记录、处理计划、Mikan 番组绑定和去重回执；不会取消 115 云端任务，也不会修改登录信息、目录或站点设置。',
-		complete_reset_success: '已清除本地任务 {tasks} 条、番组绑定 {series} 个。115 云端任务未受影响。',
+		confirm_complete_reset: '确定完全重置扩展本地任务吗？这会清除全部任务记录、处理计划、Mikan 番组绑定和去重回执；不会取消 115 云端任务，也不会修改登录信息、目录或站点设置；Bridge 已领取任务、租约回执和事件 outbox 会保留，避免重复提交。',
+		complete_reset_success: '已清除本地任务 {tasks} 条、番组绑定 {series} 个。115 云端任务未受影响；Bridge 任务回执和事件 outbox 已保留。',
 		complete_reset_failed: '完全重置失败：',
 		refresh_button: '刷新',
 		logs_empty: '暂无后台任务日志',
@@ -142,6 +159,17 @@ const I18N_STRINGS = {
 		clean_images_hint: 'Off by default; when enabled, common images below the threshold become candidates.',
 		clean_nfo_label: 'Clean NFO files',
 		clean_nfo_hint: 'Off by default; when enabled, .nfo files below the threshold become candidates.',
+		bridge_title: 'Local service connection',
+		bridge_subtitle: 'Claim candidates from the local service and submit them to 115. The endpoint is fixed at http://127.0.0.1:52115; page cookies are never read.',
+		bridge_enabled_label: 'Enable local service connection',
+		bridge_enabled_hint: 'Claims one job every 30 seconds when enabled; disabled mode makes no local requests.',
+		bridge_token_label: 'Connection key',
+		bridge_token_hint: 'The key stays on this device and is used only for the local service; 115 login information stays in the browser.',
+		bridge_target_label: 'Target directory',
+		bridge_target_hint: 'Claimed jobs are saved to this directory; the root is used when none is configured.',
+		bridge_permission_hint: 'Enabling for the first time requests the optional http://127.0.0.1/* permission.',
+		bridge_permission_denied: 'The local Bridge permission was not granted; Bridge remains disabled.',
+		bridge_token_required: 'Enter a Bearer token before enabling Bridge.',
 		save_button: 'Save settings',
 		reset_button: 'Reset defaults',
 		save_success: 'Settings saved.',
@@ -155,8 +183,8 @@ const I18N_STRINGS = {
 		clear_logs_success: 'Logs cleared; {count} active task(s) retained.',
 		clear_logs_failed: 'Failed to clear logs: ',
 		complete_reset_button: 'Complete task reset',
-		confirm_complete_reset: 'Reset all local extension task state? This clears task records, processing plans, Mikan series bindings, and dedupe receipts. It does not cancel 115 cloud tasks or change login, directories, or site settings.',
-		complete_reset_success: 'Cleared {tasks} local task(s) and {series} series binding(s). 115 cloud tasks were not changed.',
+		confirm_complete_reset: 'Reset all local extension task state? This clears task records, processing plans, Mikan series bindings, and dedupe receipts. It does not cancel 115 cloud tasks or change login, directories, or site settings. Bridge claims, lease receipts, and the event outbox are retained to prevent duplicate submission.',
+		complete_reset_success: 'Cleared {tasks} local task(s) and {series} series binding(s). 115 cloud tasks were not changed; Bridge claims, receipts, and the event outbox were retained.',
 		complete_reset_failed: 'Complete reset failed: ',
 		refresh_button: 'Refresh',
 		logs_empty: 'No background task logs yet',
@@ -237,7 +265,7 @@ function applyLocale() {
 	})
 }
 
-function renderSavePathSelectors(preserveSiteProfiles = false, selectedCidOverride = undefined) {
+function renderSavePathSelectors(preserveSiteProfiles = false, selectedCidOverride = undefined, bridgeCidOverride = undefined) {
 	const listText = document.getElementById('push115-save-dirs-input')?.value || ''
 	const rootLabel = getConfig(CONFIG_KEYS.I18N_LOCALE) === 'en-US' ? 'Root' : '根目录'
 	const select = document.getElementById('push115-default-save-cid')
@@ -254,6 +282,22 @@ function renderSavePathSelectors(preserveSiteProfiles = false, selectedCidOverri
 			option.textContent = Push115.PathUtils.formatPathLabel(item, rootLabel)
 			option.selected = item.cid === selectedCid
 			select.appendChild(option)
+		}
+	}
+	const bridgeSelect = document.getElementById('push115-bridge-target-cid')
+	if (bridgeSelect && window.Push115?.PathUtils) {
+		const selectedCid = Push115.PathUtils.normalizeCid(
+			bridgeCidOverride ?? bridgeSelect.value ?? getConfig(CONFIG_KEYS.BRIDGE_TARGET_CID),
+		) || '0'
+		const options = Push115.PathUtils.buildPathOptions(listText, rootLabel)
+		if (!options.some(item => item.cid === selectedCid)) options.push({ name: '', cid: selectedCid })
+		bridgeSelect.textContent = ''
+		for (const item of options) {
+			const option = document.createElement('option')
+			option.value = item.cid
+			option.textContent = Push115.PathUtils.formatPathLabel(item, rootLabel)
+			option.selected = item.cid === selectedCid
+			bridgeSelect.appendChild(option)
 		}
 	}
 	if (preserveSiteProfiles) {
@@ -278,7 +322,9 @@ function fillForm() {
 	document.getElementById('push115-clean-extensions').value = getConfig(CONFIG_KEYS.CLEAN_EXTENSIONS)
 	document.getElementById('push115-clean-images').checked = getConfig(CONFIG_KEYS.CLEAN_IMAGES) === true
 	document.getElementById('push115-clean-nfo').checked = getConfig(CONFIG_KEYS.CLEAN_NFO) === true
-	renderSavePathSelectors(false, getConfig(CONFIG_KEYS.SAVE_PATH_CID))
+	document.getElementById('push115-bridge-enabled').checked = getConfig(CONFIG_KEYS.BRIDGE_ENABLED) === true
+	document.getElementById('push115-bridge-token').value = getConfig(CONFIG_KEYS.BRIDGE_TOKEN) || ''
+	renderSavePathSelectors(false, getConfig(CONFIG_KEYS.SAVE_PATH_CID), getConfig(CONFIG_KEYS.BRIDGE_TARGET_CID))
 }
 
 function collectFormConfig() {
@@ -300,6 +346,9 @@ function collectFormConfig() {
 		[CONFIG_KEYS.CLEAN_IMAGES]: document.getElementById('push115-clean-images').checked,
 		[CONFIG_KEYS.CLEAN_NFO]: document.getElementById('push115-clean-nfo').checked,
 		[CONFIG_KEYS.SITE_PROFILES]: siteProfiles,
+		[CONFIG_KEYS.BRIDGE_ENABLED]: document.getElementById('push115-bridge-enabled').checked,
+		[CONFIG_KEYS.BRIDGE_TOKEN]: document.getElementById('push115-bridge-token').value.trim(),
+		[CONFIG_KEYS.BRIDGE_TARGET_CID]: normalizeCid(document.getElementById('push115-bridge-target-cid').value),
 	}
 }
 
@@ -309,7 +358,9 @@ function showSettingsStatus(type, message) {
 	area.textContent = message || ''
 }
 
-async function requestContentScriptPermissions(siteProfiles) {
+
+async function requestContentScriptPermissions(siteProfiles, extraOrigins = []) {
+	const missingOrigins = []
 	for (const [siteId, definition] of Object.entries(Push115.Config.SITE_DEFINITIONS)) {
 		if (!siteProfiles[siteId]?.enabled) continue
 		const origins = [...definition.matches]
@@ -320,9 +371,26 @@ async function requestContentScriptPermissions(siteProfiles) {
 		if (!granted && !origins.includes('<all_urls>')) {
 			granted = await chrome.permissions.contains({ origins: ['<all_urls>'] })
 		}
-		if (!granted) granted = await chrome.permissions.request({ origins })
-		if (!granted) throw new Error(`${definition.label}: ${t('permission_denied')}`)
+		if (!granted) missingOrigins.push(...origins)
 	}
+	missingOrigins.push(...extraOrigins)
+	const uniqueOrigins = [...new Set(missingOrigins)]
+	if (uniqueOrigins.length === 0) return true
+	const granted = await chrome.permissions.request({ origins: uniqueOrigins })
+	if (!granted) {
+		if (extraOrigins.length > 0) throw new Error(t('bridge_permission_denied'))
+		throw new Error(t('permission_denied'))
+	}
+	return true
+}
+
+async function requestBridgePermission(nextConfig) {
+	if (nextConfig[CONFIG_KEYS.BRIDGE_ENABLED] !== true) return []
+	if (!nextConfig[CONFIG_KEYS.BRIDGE_TOKEN]) throw new Error(t('bridge_token_required'))
+	const origin = Push115.Config.BRIDGE_HOST_PERMISSION
+	if (!chrome.permissions?.contains || !chrome.permissions?.request) return []
+	const granted = await chrome.permissions.contains({ origins: [origin] })
+	return granted ? [] : [origin]
 }
 
 async function saveSettings(event) {
@@ -335,7 +403,8 @@ async function saveSettings(event) {
 		// both the global default and every site profile before collecting values.
 		renderSavePathSelectors(true)
 		const nextConfig = collectFormConfig()
-		await requestContentScriptPermissions(nextConfig[CONFIG_KEYS.SITE_PROFILES])
+		const bridgeOrigins = await requestBridgePermission(nextConfig)
+		await requestContentScriptPermissions(nextConfig[CONFIG_KEYS.SITE_PROFILES], bridgeOrigins)
 		await chrome.storage.local.set(nextConfig)
 		await sendMessage('SYNC_CONTENT_SCRIPTS')
 		configCache = { ...configCache, ...nextConfig }

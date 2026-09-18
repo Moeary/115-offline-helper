@@ -44,7 +44,51 @@
 
 	async function read() {
 		const data = await chrome.storage.local.get(STORAGE_KEYS.TASKS)
-		return rememberTasks(Array.isArray(data[STORAGE_KEYS.TASKS]) ? data[STORAGE_KEYS.TASKS] : [])
+		const records = Array.isArray(data[STORAGE_KEYS.TASKS]) ? data[STORAGE_KEYS.TASKS] : []
+		return rememberTasks(records.map(migrateTask))
+	}
+
+	function numberOrText(value) {
+		const text = String(value ?? '').replace(/\s+/g, '').trim()
+		if (!/^\d+$/.test(text)) return ''
+		const number = Number(text)
+		return Number.isSafeInteger(number) ? number : text
+	}
+
+	function getIntentLink(url) {
+		try { return intentApi.parseDownloadLink?.(url) || null } catch (error) { return null }
+	}
+
+	function normalizeLinkType(value, parsed = null) {
+		const candidate = String(value || '').trim().toLowerCase()
+		return ['magnet', 'ed2k'].includes(candidate) ? candidate : String(parsed?.linkType || '').trim().toLowerCase()
+	}
+
+	function migrateTask(task) {
+		if (!task || typeof task !== 'object') return task
+		const metadata = task.metadata && typeof task.metadata === 'object' && !Array.isArray(task.metadata)
+			? task.metadata
+			: {}
+		const link = getIntentLink(task.url || task.magnet)
+		const expectedName = String(task.expectedName || metadata.expectedName || link?.fileName || task.remoteName || '').trim()
+		const expectedSize = task.expectedSize !== undefined && task.expectedSize !== null && task.expectedSize !== ''
+			? numberOrText(task.expectedSize)
+			: (link?.size || numberOrText(metadata.expectedSize || metadata.ed2kSize))
+		const expectedHash = String(task.expectedHash || metadata.expectedHash || link?.hash || metadata.ed2kHash || '').trim().toLowerCase()
+		const linkType = normalizeLinkType(task.linkType || metadata.linkType, link)
+		const jobId = String(task.jobId || metadata.bridgeJobId || task.remoteId || '').trim()
+		const monitorDownload = task.monitorDownload === true || metadata.monitorDownload === true
+		if (task.linkType === undefined && linkType) task.linkType = linkType
+		if (task.expectedName === undefined && expectedName) task.expectedName = expectedName
+		if (task.expectedSize === undefined && expectedSize !== '') task.expectedSize = expectedSize
+		if (task.expectedHash === undefined && expectedHash) task.expectedHash = expectedHash
+		if (task.jobId === undefined && jobId) task.jobId = jobId
+		if (monitorDownload && task.monitorDownload !== true) task.monitorDownload = true
+		if (task.code === undefined || !task.code) {
+			const code = intentApi.extractVideoCode?.([metadata.pageCode, expectedName, task.remoteName, task.title]) || ''
+			if (code) task.code = code
+		}
+		return task
 	}
 
 	async function clearLogsNow() {
@@ -102,8 +146,17 @@
 		const input = details.intent && typeof details.intent === 'object' ? details.intent : details
 		const url = String(input.url || input.magnet || '').trim()
 		const metadata = input.metadata && typeof input.metadata === 'object' ? { ...input.metadata } : {}
+		const link = getIntentLink(url)
+		const expectedName = String(input.expectedName || metadata.expectedName || link?.fileName || input.name || intentApi.extractDisplayName(url) || '').trim()
+		const expectedSize = input.expectedSize !== undefined && input.expectedSize !== null && input.expectedSize !== ''
+			? numberOrText(input.expectedSize)
+			: (link?.size || numberOrText(metadata.expectedSize || metadata.ed2kSize))
+		const expectedHash = String(input.expectedHash || metadata.expectedHash || link?.hash || metadata.ed2kHash || '').trim().toLowerCase()
+		const linkType = normalizeLinkType(input.linkType || metadata.linkType, link)
 		const pageCode = intentApi.normalizeCode(metadata.pageCode)
-		const code = pageCode || intentApi.normalizeCode(input.code) || intentApi.normalizeCode(input.name) || intentApi.normalizeCode(input.title)
+		const code = pageCode || intentApi.extractVideoCode?.([input.code, expectedName, input.name, input.title]) || ''
+		const jobId = String(input.jobId || metadata.bridgeJobId || '').trim()
+		const monitorDownload = input.monitorDownload === true || metadata.monitorDownload === true
 		const explicitProcessor = input.processorProfile
 		const processorProfile = explicitProcessor
 			? normalizeProcessorProfile(explicitProcessor, input.mediaType === 'anime' ? 'anime' : 'generic')
@@ -112,9 +165,24 @@
 			sourceSite: String(input.sourceSite || input.source || 'generic').trim().toLowerCase() || 'generic',
 			mediaType: ['generic', 'jav', 'anime'].includes(input.mediaType) ? input.mediaType : 'generic',
 			url,
-			title: String(input.title || '').trim(),
+			title: String(input.title || expectedName || '').trim(),
 			code,
-			metadata: { ...metadata, btih: metadata.btih || intentApi.extractBtih(url) },
+			jobId,
+			monitorDownload,
+			linkType,
+			expectedName,
+			expectedSize,
+			expectedHash,
+			metadata: {
+				...metadata,
+				btih: metadata.btih || intentApi.extractBtih(url),
+				...(linkType ? { linkType } : {}),
+				...(expectedName ? { expectedName } : {}),
+				...(expectedSize !== '' ? { expectedSize } : {}),
+				...(expectedHash ? { expectedHash } : {}),
+				...(jobId && !metadata.bridgeJobId ? { bridgeJobId: jobId } : {}),
+				...(monitorDownload ? { monitorDownload: true } : {}),
+			},
 			savePathCid: normalizeCid(input.savePathCid, '0'),
 			processorProfile,
 		}
@@ -126,20 +194,30 @@
 		const remoteId = String(
 			details.remoteId || details.info_hash || details.id || intent.metadata.btih || '',
 		).trim().toLowerCase()
-		const remoteName = String(details.name || intentApi.extractDisplayName(intent.url) || '').trim()
+		const jobId = String(details.jobId || intent.jobId || intent.metadata.bridgeJobId || remoteId || '').trim()
+		const remoteName = String(details.name || intent.expectedName || intentApi.extractDisplayName(intent.url) || '').trim()
 		// Keep the legacy QUEUE_TASK contract: callers that omit monitor asked for
 		// persistent monitoring. New SUBMIT_INTENT callers pass an explicit bool.
-		const monitor = details.monitor === undefined ? true : details.monitor === true
+		const monitor = intent.monitorDownload === true || details.monitorDownload === true
+			|| (details.monitor === undefined ? true : details.monitor === true)
 		const records = await read()
-		const existing = records.find(task => taskIsActive(task) && (
-			(remoteId && String(task.remoteId || '').toLowerCase() === remoteId) ||
-			(intent.url && (task.url === intent.url || task.magnet === intent.url))
-		))
+		const incomingJobId = String(intent.jobId || intent.metadata.bridgeJobId || '').trim().toLowerCase()
+		const existing = records.find(task => {
+			if (!taskIsActive(task)) return false
+			const taskJobId = String(task.jobId || task.metadata?.bridgeJobId || '').trim().toLowerCase()
+			// A bridge job is the stable unit of work. Never merge a different
+			// bridge job merely because it happens to carry the same URL/hash.
+			if (incomingJobId && taskJobId && incomingJobId !== taskJobId) return false
+			return (incomingJobId && taskJobId && incomingJobId === taskJobId)
+				|| (remoteId && String(task.remoteId || '').toLowerCase() === remoteId)
+				|| (intent.url && (task.url === intent.url || task.magnet === intent.url))
+		})
 		const task = existing || { taskId: makeTaskId(), createdAt: now, attempts: 0, logs: [] }
 		rememberTask(task)
 
 		Object.assign(task, {
 			remoteId: remoteId || task.remoteId || '',
+			jobId: jobId || task.jobId || task.remoteId || '',
 			remoteName: remoteName || task.remoteName || '',
 			url: intent.url || task.url || task.magnet || '',
 			magnet: intent.url || task.magnet || '',
@@ -148,7 +226,13 @@
 			mediaType: intent.mediaType,
 			title: intent.title || task.title || '',
 			code: intent.code || task.code || '',
+			linkType: intent.linkType || task.linkType || '',
+			expectedName: intent.expectedName || task.expectedName || '',
+			expectedSize: intent.expectedSize !== '' ? intent.expectedSize : (task.expectedSize ?? ''),
+			expectedHash: intent.expectedHash || task.expectedHash || '',
+			monitorDownload: intent.monitorDownload === true || details.monitorDownload === true || task.monitorDownload === true,
 			metadata: { ...(task.metadata || {}), ...intent.metadata },
+			beforeSnapshot: details.beforeSnapshot || details.preSubmitSnapshot || task.beforeSnapshot || null,
 			savePathCid: intent.savePathCid,
 			processorProfile: intent.processorProfile,
 			status: monitor ? 'waiting' : 'recorded',

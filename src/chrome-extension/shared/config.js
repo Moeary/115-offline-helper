@@ -21,7 +21,22 @@
 		TASKS: 'push115_tasks',
 		TASK_MONITOR_CURSOR: 'push115_task_monitor_cursor',
 		ANIME_LIBRARY: 'push115_anime_library',
+		BRIDGE_ENABLED: 'push115_bridge_enabled',
+		BRIDGE_TOKEN: 'push115_bridge_token',
+		BRIDGE_TARGET_CID: 'push115_bridge_target_cid',
+		BRIDGE_JOBS: 'push115_bridge_jobs',
+		BRIDGE_OUTBOX: 'push115_bridge_outbox',
 	})
+
+	// The bridge deliberately has one fixed loopback endpoint.  Keeping this
+	// value in shared configuration lets the options page explain and request
+	// exactly the permission used by the service worker without exposing a free
+	// form URL setting.
+	const BRIDGE_BASE_URL = 'http://127.0.0.1:52115'
+	const BRIDGE_ORIGIN = 'http://127.0.0.1:52115'
+	// Chrome match patterns are host based; the transport itself still checks
+	// the fixed :52115 origin before every request.
+	const BRIDGE_HOST_PERMISSION = 'http://127.0.0.1/*'
 
 	const MIKAN_HOSTNAMES = Object.freeze([
 		'mikan.congvps.icu',
@@ -133,6 +148,9 @@
 		[STORAGE_KEYS.CLEAN_EXTENSIONS]: '',
 		[STORAGE_KEYS.CLEAN_IMAGES]: false,
 		[STORAGE_KEYS.CLEAN_NFO]: false,
+		[STORAGE_KEYS.BRIDGE_ENABLED]: false,
+		[STORAGE_KEYS.BRIDGE_TOKEN]: '',
+		[STORAGE_KEYS.BRIDGE_TARGET_CID]: '0',
 	})
 
 	function normalizeCid(value, fallback = '0') {
@@ -195,9 +213,30 @@
 		return profiles
 	}
 
+	const PUBLIC_CONFIG_KEYS = Object.freeze([...new Set([
+		...Object.keys(DEFAULT_CONFIG),
+		STORAGE_KEYS.SITE_PROFILES,
+	])].filter(key => ![
+		STORAGE_KEYS.BRIDGE_ENABLED,
+		STORAGE_KEYS.BRIDGE_TOKEN,
+		STORAGE_KEYS.BRIDGE_TARGET_CID,
+		STORAGE_KEYS.BRIDGE_JOBS,
+		STORAGE_KEYS.BRIDGE_OUTBOX,
+	].includes(key)))
+
 	async function loadConfig() {
-		const stored = await chrome.storage.local.get(null)
+		// Content scripts only need the public site/file settings.  In
+		// particular, never use get(null) here: that would copy the local bridge
+		// Bearer token into every content-script configuration object.
+		const stored = await chrome.storage.local.get(PUBLIC_CONFIG_KEYS)
 		const config = { ...DEFAULT_CONFIG, ...stored }
+		for (const key of [
+			STORAGE_KEYS.BRIDGE_ENABLED,
+			STORAGE_KEYS.BRIDGE_TOKEN,
+			STORAGE_KEYS.BRIDGE_TARGET_CID,
+			STORAGE_KEYS.BRIDGE_JOBS,
+			STORAGE_KEYS.BRIDGE_OUTBOX,
+		]) delete config[key]
 		config[STORAGE_KEYS.SITE_PROFILES] = normalizeSiteProfiles(stored[STORAGE_KEYS.SITE_PROFILES], config)
 		return config
 	}
@@ -250,6 +289,10 @@
 		DEFAULT_SITE_PROFILES,
 		PROCESSOR_PROFILES,
 		BATCH_CONCURRENCY_MAX,
+		PUBLIC_CONFIG_KEYS,
+		BRIDGE_BASE_URL,
+		BRIDGE_ORIGIN,
+		BRIDGE_HOST_PERMISSION,
 		DEFAULT_CONFIG,
 		normalizeCid,
 		normalizeProcessorProfile,

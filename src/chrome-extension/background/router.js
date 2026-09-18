@@ -9,10 +9,46 @@
 		if (generation !== submissionGeneration) throw new Error('本地任务状态已完全重置，请重新提交')
 	}
 
+	function submissionJobId(result, intent) {
+		return String(
+			intent.jobId || intent.metadata?.bridgeJobId
+			|| result?.task_id || result?.taskId || result?.job_id || result?.jobId || result?.id
+			|| result?.info_hash || result?.infoHash || result?.hash || intent.metadata?.btih || '',
+		).trim()
+	}
+
+	function snapshotItem(item) {
+		return {
+			fid: String(item?.fid ?? item?.file_id ?? item?.fileId ?? '').trim(),
+			cid: String(item?.cid ?? item?.dir_id ?? item?.dirId ?? '').trim(),
+			name: String(item?.n || item?.name || '').trim(),
+			size: item?.size ?? item?.s ?? item?.file_size ?? item?.fileSize ?? '',
+			hash: String(item?.hash || item?.ed2kHash || item?.file_hash || item?.content_hash || '').trim().toLowerCase(),
+			isFile: Boolean(item?.sha),
+		}
+	}
+
+	async function captureBeforeSnapshot(intent) {
+		// ED2K + JAV is the direct-file path.  Capture the complete, breadcrumb
+		// validated listing before submitting so a later file with the same name
+		// cannot be mistaken for this task's result.
+		if (intent.processorProfile !== 'jav' || intent.linkType !== 'ed2k') return null
+		const folders = background.Folders
+		if (!folders?.read) return null
+		const cid = String(intent.savePathCid || '0').trim()
+		const listing = await folders.read(cid)
+		return {
+			cid,
+			capturedAt: Date.now(),
+			items: (Array.isArray(listing?.items) ? listing.items : []).map(snapshotItem),
+		}
+	}
+
 	async function submitIntent(rawIntent) {
 		const generation = submissionGeneration
 		const intent = global.Push115.DownloadIntent.create(rawIntent)
-		const key = global.Push115.DownloadIntent.dedupeKey(intent.url)
+		const bridgeJobId = String(intent.jobId || intent.metadata?.bridgeJobId || '').trim().toLowerCase()
+		const key = bridgeJobId ? `bridge-job:${bridgeJobId}` : global.Push115.DownloadIntent.dedupeKey(intent.url)
 		const previous = submissions.get(key) || Promise.resolve()
 		const work = previous.catch(() => {}).then(() => submitNormalizedIntent(intent, generation))
 		submissions.set(key, work)
@@ -21,6 +57,13 @@
 
 	async function submitNormalizedIntent(intent, generation = submissionGeneration) {
 		assertSubmissionGeneration(generation)
+		const bridgeJobId = String(intent.jobId || intent.metadata?.bridgeJobId || '').trim().toLowerCase()
+		if (bridgeJobId && intent.metadata?.skipSubmitted !== false) {
+			const tasks = await background.TaskStore.read()
+			const existing = tasks.find(task => String(task.jobId || task.metadata?.bridgeJobId || '').trim().toLowerCase() === bridgeJobId
+				&& task.status !== 'failed')
+			if (existing) return { duplicate: true, task: existing, message: '该桥接任务已登记；可在任务日志中重试' }
+		}
 		const isBoundAnime = intent.processorProfile === 'anime' && Boolean(intent.metadata.animeTarget)
 		if (isBoundAnime) {
 			const binding = await background.AnimeLibrary.validateTarget(intent)
@@ -33,23 +76,31 @@
 				return { duplicate: true, message: '本番已提交过此磁链；可在任务日志中重试' }
 			}
 		}
+		const beforeSnapshot = await captureBeforeSnapshot(intent)
+		assertSubmissionGeneration(generation)
 		const result = await background.OfflineApi.addTask(intent.url, intent.savePathCid)
 		assertSubmissionGeneration(generation)
+		const jobId = submissionJobId(result, intent)
 		const config = await chrome.storage.local.get([
 			STORAGE_KEYS.AUTO_DELETE_SMALL,
 			STORAGE_KEYS.AUTO_ORGANIZE,
 		])
 		const isAnimeBatch = global.Push115.AnimeSeries.needsFlatten(intent)
-		const monitor = isAnimeBatch
+		const monitor = intent.monitorDownload === true || intent.metadata?.monitorDownload === true
+			? true
+			: isAnimeBatch
 			? true
 			: intent.processorProfile === 'jav'
 			? config[STORAGE_KEYS.AUTO_DELETE_SMALL] === true || config[STORAGE_KEYS.AUTO_ORGANIZE] === true
 			: config[STORAGE_KEYS.AUTO_DELETE_SMALL] === true
 		const task = await background.TaskStore.queue({
-			intent,
+			intent: { ...intent, jobId },
+			jobId,
 			remoteId: result.info_hash || result.hash || result.task_id || intent.metadata.btih,
 			name: result.name || '',
 			monitor,
+			monitorDownload: intent.monitorDownload === true || intent.metadata?.monitorDownload === true,
+			beforeSnapshot,
 		})
 		assertSubmissionGeneration(generation)
 		if (isBoundAnime) await background.AnimeLibrary.recordSubmission(intent, task.taskId)

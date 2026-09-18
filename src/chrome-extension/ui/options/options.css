@@ -187,6 +187,24 @@ h3 {
 	background: #fbfcfe;
 }
 
+.push115-bridge-panel {
+	display: grid;
+	gap: 12px;
+	padding: 13px;
+	border: 1px solid rgba(0, 122, 255, 0.18);
+	border-radius: 11px;
+	background: rgba(0, 122, 255, 0.035);
+}
+
+.push115-bridge-enabled {
+	margin: 0;
+	min-height: 0;
+}
+
+.push115-bridge-permission-hint {
+	margin: 0;
+}
+
 .push115-site-profile-heading {
 	display: flex;
 	align-items: center;
@@ -530,6 +548,11 @@ body.dark-theme .push115-toggle,
 body.dark-theme .push115-task-card {
 	border-color: rgba(255, 255, 255, 0.11);
 	background: #1b1e22;
+}
+
+body.dark-theme .push115-bridge-panel {
+	border-color: rgba(80, 160, 255, 0.3);
+	background: rgba(40, 110, 190, 0.11);
 }
 
 body.dark-theme .push115-toggle small,

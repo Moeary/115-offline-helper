@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-<img src="https://img.shields.io/badge/version-1.6.0-orange" alt="Version">
+<img src="https://img.shields.io/badge/version-1.7.0-orange" alt="Version">
 </p>
 
 ---
@@ -60,6 +60,8 @@ Nyaa, Sukebei and Mikan share one confirmation dialog and one rate-limited queue
 | `anime` | Keeps torrent names and directory semantics; batch/Mikan archive moves identified video/subtitle files into the chosen destination | No JAV rename and no guessed show/episode names |
 
 Subtitle extensions are protected by default, image/NFO cleanup is opt-in, and every remote move/rename/recycle is verified with explicit CID/FID values. Unknown files, collisions and inconsistent directory responses stay in place for a later retry.
+
+South Plus ED2K tasks persist the original filename, size and hash from the link together with a pre-submit directory snapshot. After the download finishes, the `jav` profile acts on one explicit FID only when exactly one new file matches (`CODE.ext` when that file is the main video); the single-file path never scans or moves other files in the directory. Ambiguous matches, identity mismatches or directory read failures keep the file in place for a later verification instead of scanning the root or other tasks.
 
 Mikan also handles a common 115 layout where the wrapper folder has exactly the same name as its video. Instead of relying on a rename that may be rejected, the processor creates a task-specific `__push115_stage_*` folder inside the destination, stages the explicit file IDs there, verifies and recycles the empty wrapper, then moves files back and recycles the staging folder. The plan persists the staging CID and file IDs so retries do not recreate it. A real same-name file already in the destination remains a collision and is never overwritten.
 
@@ -112,7 +114,13 @@ Download the latest archive from [Releases](https://github.com/gangz1o/115-offli
 2. Maintain the shared 115 directory catalog in Settings. Site profiles and the confirmation dialog select from this catalog; legacy `Name:CID` entries are migrated automatically.
 3. Enable and configure Generic, JavBus, Nyaa, Sukebei, Mikan and South Plus separately. Set defaults, inline controls, batch controls and concurrency (default 2, safe maximum 2); all 115 file reads and mutations share a 500ms serial limiter (about 2 QPS maximum), while the background monitor polls at most two tasks per alarm in round-robin order.
 4. Push from a page or paste multiple links in the popup. The dialog can override both the site profile and destination. If South Plus has not been granted persistent page access yet, opening the popup temporarily enhances the current page; save the South Plus profile in Settings and approve its permission for automatic enhancement on new pages. After reloading the extension, already-open authorized South Plus threads are repaired automatically; refresh once if a page is still showing its old document.
-5. Inspect, refresh or retry tasks from the background task page. South Plus’s **Record** action stores the link, source, filename and code locally without creating a 115 cloud task. **Clear logs** removes history only; it keeps active tasks, series bindings and deduplication receipts. If stale local state is blocking new submissions, use **Complete task reset**: it clears local tasks, processing plans, series bindings and dedupe receipts, while leaving 115 cloud tasks, login, directories and site settings untouched.
+5. Inspect, refresh or retry tasks from the background task page. South Plus’s **Record** action stores the link, source, filename and code locally without creating a 115 cloud task. **Clear logs** removes history only; it keeps active tasks, series bindings and deduplication receipts. If stale local state is blocking new submissions, use **Complete task reset**: it clears local tasks, processing plans, series bindings and dedupe receipts, while leaving 115 cloud tasks, login, directories and site settings untouched. Bridge claims, lease receipts and its event outbox are retained so a reset cannot submit the same job again.
+
+### Local automation Bridge
+
+The extension can optionally connect to a local FastAPI service at `http://127.0.0.1:52115`, claim Telegram `/av` and JavBus candidates, and submit them through the existing background `Router.submitIntent` path. Bridge is off by default. Enabling it requests only the optional `http://127.0.0.1/*` permission; the transport origin and port remain fixed. The Bearer token stays in local extension storage, is used only by the service worker, and is never injected into pages or sent as a cookie.
+
+The Settings page accepts the token and target directory CID. The worker claims one job every 30 seconds, persists its `jobId`, lease and submission state before submitting an intent with explicit `processorProfile: jav` and `metadata.monitorDownload: true`, then reports progress and terminal states with stable event IDs. If a network failure, worker restart or local persistence error leaves the submission result unclear, the job becomes `uncertain` and is never submitted again automatically. A local `recorded` history entry is never reported as completed. Windows startup, token, Telegram allowlist and CORS configuration are described in [`bridge/README.md`](bridge/README.md).
 
 Generic uses optional `<all_urls>` permission. Dedicated site enhancements use optional host permissions, with a one-time `activeTab` fallback for the current HTTP(S) page when the popup is opened. OpenBT has no separate profile and follows Generic when that permission is enabled.
 
@@ -131,8 +139,8 @@ See [`src/README.md`](src/README.md), [`src/chrome-extension/README.md`](src/chr
 ## Privacy and license
 
 - Data is kept locally in `chrome.storage.local`.
-- No user data is collected or shared.
-- Network access is limited to `*.115.com`.
+- No telemetry, advertising or profiling is performed, and 115 cookies are never uploaded to the Bridge or Telegram. If Telegram is enabled, selected resources and task status are sent to the configured allowlisted chats.
+- By default the extension contacts only `*.115.com`; when Local Bridge is enabled it also contacts the fixed `127.0.0.1:52115` loopback service.
 - [Privacy policy](https://gangz1o.github.io/115-offline-helper/privacy-policy.html)
 
 [MIT License](LICENSE)

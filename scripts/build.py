@@ -40,6 +40,7 @@ REQUIRED_ARCHITECTURE_ENTRIES = (
     "background/tasks/anime-library.js",
     "background/tasks/store.js",
     "background/tasks/monitor.js",
+    "background/bridge-client.js",
     "background/processors/generic.js",
     "background/processors/anime.js",
     "background/processors/jav.js",

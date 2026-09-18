@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.6.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.7.0-orange" alt="Version">
 </p>
 
 ---
@@ -64,6 +64,8 @@ Mikan 当前支持 `mikan.congvps.icu`、`mikanani.me`、`mikanime.tv` 和镜像
 | `anime` | 保留 torrent 的原始文件名和目录语义；批量或 Mikan 归档时，把明确的视频/字幕归到选定目录 | 不套用 JAV 重命名，不猜番名和集数 |
 
 清理仍遵循保守原则：字幕扩展名默认保护，图片/NFO 清理默认关闭；移动、改名、回收目录前都以明确的 CID/FID 复核。遇到同名冲突、未知文件或目录状态不一致时保留源文件，等待后续重试。
+
+South Plus 的 ED2K 任务会把链接中的原始文件名、大小和哈希连同提交前目录快照保存下来。下载完成后，只有在目标目录中找到唯一匹配的新文件时，`jav` profile 才会按明确的 FID 移动并整理这一文件（主视频目标名为 `番号.ext`）；单文件路径只处理这个 FID，不连带扫描或移动目录内其他文件。匹配不唯一、校验不符或目录读取失败时保留文件并等待后续复核，不扫描根目录或其他任务。
 
 Mikan 还专门处理 115 常见的“包装目录名与里面的视频文件同名”情况：不依赖容易失败的远程改名，而是在番组目录下创建本任务专用的 `__push115_stage_*` 临时目录，先按明确 FID 暂存视频/字幕，确认原包装目录为空后回收，再把文件移回目标目录并回收临时目录。移动计划会记录临时 CID 和文件 ID，重试不会重复创建；目标目录里真正存在的同名文件仍视为冲突，不会覆盖。
 
@@ -132,7 +134,13 @@ pixi run deploy
 2. 在设置页维护“115 离线目录”清单。站点档案和确认窗口从这份清单选择目录；旧版的 `目录名:CID` 配置会自动迁移，不需要为每个站点重复填写 CID。
 3. 在“站点增强”中分别启用 Generic、JavBus、Nyaa、Sukebei、Mikan、South Plus，设置各自默认目录、默认规则、内联按钮和列表并发数。默认并发为 2，安全上限也是 2；115 文件读写共用 500ms 串行节流（不超过约 2 QPS），后台任务监控每轮最多轮询 2 项并按游标轮转。
 4. 回到网页点击按钮或打开弹窗手工粘贴链接。确认窗口里的规则和目录可以覆盖网站默认值。若 South Plus 尚未授予持久网页权限，打开扩展弹窗会临时增强当前网页；要让新页面自动出现按钮，请在设置页保存并允许 South Plus 权限。重新加载扩展后，已打开且已获授权的 South Plus 线程也会自动补注入；若页面仍停留在旧文档，可手动刷新一次。
-5. 在主页的后台任务页查看处理日志、刷新状态或重试失败项；South Plus 的“记录”按钮只保存本地链接、来源、文件名和番号，不会创建 115 云端任务。设置页提供“清空日志”，只清除历史记录，不取消进行中的任务，也不清除番组绑定和去重回执。若本地任务状态因目录失效而卡住，可使用“完全重置任务”：它会清除扩展本地任务、处理计划、番组绑定和去重回执，但不会取消 115 云端任务，也不会修改登录、目录或站点设置。
+5. 在主页的后台任务页查看处理日志、刷新状态或重试失败项；South Plus 的“记录”按钮只保存本地链接、来源、文件名和番号，不会创建 115 云端任务。设置页提供“清空日志”，只清除历史记录，不取消进行中的任务，也不清除番组绑定和去重回执。若本地任务状态因目录失效而卡住，可使用“完全重置任务”：它会清除扩展本地任务、处理计划、番组绑定和去重回执，但不会取消 115 云端任务，也不会修改登录、目录或站点设置；Bridge 已领取任务、租约回执和事件 outbox 会保留，避免重置后重复提交。
+
+### 本地自动任务 Bridge
+
+扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。Bridge 默认关闭；在设置页启用时，浏览器只请求 `http://127.0.0.1/*` 可选权限，传输地址和端口仍固定，Bearer token 只保存在本地设置并由 service worker 使用，不会注入网页或转发 Cookie。
+
+设置页可填写 token 和目标目录 CID。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有 `processorProfile: jav`、`metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Bridge 的 Windows 启动、token、Telegram allowlist 和 CORS 配置见 [`bridge/README.md`](bridge/README.md)。
 
 ### 权限说明
 
@@ -171,8 +179,8 @@ node --test tests/*.test.cjs
 ## 隐私与许可
 
 - 数据通过 `chrome.storage.local` 保存在本地。
-- 不收集、传输或共享用户数据。
-- 仅与 `*.115.com` 域名通信。
+- 不做遥测、广告或用户画像，也不会把 115 Cookie 上传给 Bridge 或 Telegram；若主动启用 Telegram，所选资源和任务状态会发送到配置的允许聊天。
+- 默认仅与 `*.115.com` 通信；启用本地 Bridge 后，另与固定的 `127.0.0.1:52115` 通信。
 - [完整隐私政策](https://gangz1o.github.io/115-offline-helper/privacy-policy.html)
 
 [MIT License](LICENSE)

@@ -49,6 +49,12 @@
 				method: 'POST',
 				data: { url, uid, sign, time, wp_path_id: savePathCid, savepath: '' },
 			}))
+			if (result?.state === false) {
+				const error = new Error(result?.error_msg || '115 离线任务被远端拒绝')
+				error.code = 'REMOTE_REJECTED'
+				error.remoteRejected = true
+				throw error
+			}
 			if (!result?.state) throw new Error(result?.error_msg || '115 离线任务提交失败')
 			return result
 		})
