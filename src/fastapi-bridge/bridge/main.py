@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
         import uvicorn
     except ImportError:
         print(
-            "缺少 uvicorn，请先安装 bridge/requirements.txt 中的依赖。",
+            "缺少 uvicorn，请先在仓库根目录运行 pixi install。",
             file=sys.stderr,
         )
         return 2

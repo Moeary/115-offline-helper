@@ -28,6 +28,9 @@ _CALLBACK_TOKEN = re.compile(r"^[A-Za-z0-9_-]{20,48}$")
 _AV_COMMAND = re.compile(
     r"^/av(?:@[A-Za-z0-9_]{1,64})?\s+(\S+)$", re.IGNORECASE
 )
+_ANIME_COMMAND = re.compile(
+    r"^/anime(?:@[A-Za-z0-9_]{1,64})?\s+(.+?)\s*$", re.IGNORECASE
+)
 _MAX_CANDIDATES = 24
 _MAX_CAPTION = 1024
 _MAX_BUTTON_TEXT = 56
@@ -266,6 +269,7 @@ class TelegramService:
         provider: Any,
         transport: TelegramTransport,
         *,
+        anime_provider: Any | None = None,
         allowed_chat_ids: Sequence[int] | set[int] | frozenset[int] = (),
         allowed_user_ids: Sequence[int] | set[int] | frozenset[int] = (),
         callback_ttl_seconds: int = 900,
@@ -274,6 +278,7 @@ class TelegramService:
     ) -> None:
         self.store = store
         self.provider = provider
+        self.anime_provider = anime_provider
         self.transport = transport
         self.allowed_chat_ids = frozenset(int(item) for item in allowed_chat_ids)
         self.allowed_user_ids = frozenset(int(item) for item in allowed_user_ids)
@@ -334,11 +339,23 @@ class TelegramService:
 
     @staticmethod
     def _metadata_details(metadata: object) -> tuple[str, str, str, str, list[object]]:
+        keyword = _field(metadata, "keyword")
         code = _clip(_field(metadata, "code"), 64)
-        title = _clip(_field(metadata, "title"), 512)
-        page_url = _clip(_field(metadata, "page_url", _field(metadata, "pageUrl")), 2048)
+        title = _clip(_field(metadata, "title") or keyword, 512)
+        page_url = _clip(
+            _field(
+                metadata,
+                "page_url",
+                _field(metadata, "pageUrl", _field(metadata, "feed_url", _field(metadata, "feedUrl"))),
+            ),
+            2048,
+        )
         cover_url = _clip(_field(metadata, "cover_url", _field(metadata, "coverUrl")), 2048)
         candidates = _field(metadata, "candidates", ())
+        if not candidates and isinstance(metadata, Sequence) and not isinstance(
+            metadata, (str, bytes, bytearray)
+        ):
+            candidates = metadata
         if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes, bytearray)):
             candidates = []
         return code, title, page_url, cover_url, list(candidates)
@@ -364,20 +381,30 @@ class TelegramService:
         cover_url: str,
         candidate: object,
         callback_token: str,
+        source_site: str = "javbus",
+        media_type: str = "jav",
+        processor_profile: str = "jav",
+        provider_name: str = "javbus",
     ) -> tuple[dict[str, Any], str]:
         url, candidate_title, btih, candidate_key = self._candidate_details(candidate)
         if not candidate_key:
             candidate_key = f"url:{url}"
+        guid = _clip(_field(candidate, "guid"), 2048)
+        detail_url = _clip(
+            _field(candidate, "detail_url", _field(candidate, "detailUrl")),
+            2048,
+        )
+        is_anime = source_site == "nyaa"
         raw_intent = {
             "jobId": f"callback-{callback_token}",
-            "sourceSite": "javbus",
-            "mediaType": "jav",
-            "processorProfile": "jav",
+            "sourceSite": source_site,
+            "mediaType": media_type,
+            "processorProfile": processor_profile,
             "url": url,
-            "title": title or candidate_title or code,
+            "title": (candidate_title or title or "Nyaa torrent") if is_anime else (title or candidate_title or code),
             "code": code,
             "metadata": {
-                "provider": "javbus",
+                "provider": provider_name,
                 "pageUrl": page_url,
                 "coverUrl": cover_url,
                 "candidateTitle": candidate_title,
@@ -386,6 +413,14 @@ class TelegramService:
             },
             "savePathCid": "0",
         }
+        if is_anime:
+            raw_intent["metadata"].update(
+                {
+                    "originalTitle": candidate_title or title or "Nyaa torrent",
+                    "guid": guid,
+                    "detailUrl": detail_url or guid,
+                }
+            )
         validated = IntentModel.model_validate(raw_intent)
         return model_dump(validated), candidate_key
 
@@ -399,6 +434,10 @@ class TelegramService:
         page_url: str,
         cover_url: str,
         candidates: Sequence[object],
+        source_site: str = "javbus",
+        media_type: str = "jav",
+        processor_profile: str = "jav",
+        provider_name: str = "javbus",
     ) -> Mapping[str, Any]:
         """Send a lookup and bind each opaque callback to its command user."""
 
@@ -425,6 +464,10 @@ class TelegramService:
                     cover_url=cover_url,
                     candidate=candidate,
                     callback_token=token,
+                    source_site=source_site,
+                    media_type=media_type,
+                    processor_profile=processor_profile,
+                    provider_name=provider_name,
                 )
             except (TypeError, ValueError):
                 continue
@@ -468,8 +511,49 @@ class TelegramService:
             return {"ignored": True, "reason": "unauthorized"}
         text = str(message.get("text", "") or "").strip()
         match = _AV_COMMAND.fullmatch(text)
-        if not match:
+        anime_match = _ANIME_COMMAND.fullmatch(text)
+        if not match and not anime_match:
             return {"ignored": True, "reason": "unsupported_command"}
+        if anime_match:
+            keyword = _clip(anime_match.group(1), 256)
+            if not keyword:
+                await self.transport.send_message(chat_id, "请输入搜索关键词，例如 /anime One Piece")
+                return {"handled": True, "error": "invalid_keyword"}
+            if self.anime_provider is None:
+                await self.transport.send_message(chat_id, "Nyaa 搜索未配置，请先配置 Anime provider。")
+                return {"handled": True, "error": "provider_unavailable"}
+            try:
+                metadata = await self.anime_provider.search(keyword)
+            except ProviderError:
+                await self.transport.send_message(chat_id, "Nyaa 暂时无法查询，请稍后重试。")
+                return {"handled": True, "error": "provider_unavailable"}
+            except Exception:
+                await self.transport.send_message(chat_id, "Nyaa 查询失败，请稍后重试。")
+                return {"handled": True, "error": "provider_error"}
+            _unused_code, _unused_title, feed_url, _unused_cover, candidates = self._metadata_details(metadata)
+            if not candidates:
+                await self.transport.send_message(chat_id, "Nyaa 没有找到匹配的资源。")
+                return {"handled": True, "kind": "anime", "candidateCount": 0}
+            result = await self._send_result_for_user(
+                chat_id,
+                user_id,
+                code="",
+                title=keyword,
+                page_url=feed_url,
+                cover_url="",
+                candidates=candidates,
+                source_site="nyaa",
+                media_type="anime",
+                processor_profile="anime",
+                provider_name="nyaa",
+            )
+            return {
+                "handled": True,
+                "kind": "anime",
+                "keyword": keyword,
+                "candidateCount": len(candidates),
+                "messageId": _message_id(result),
+            }
         code = normalize_exact_code(match.group(1))
         if not code:
             await self.transport.send_message(chat_id, "请输入有效的番号，例如 /av ABC-123")

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import os
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping
 from urllib.parse import urlsplit
 
 
-ROOT = Path(__file__).resolve().parent
-DEFAULT_STATE_DIR = ROOT / ".state"
+BRIDGE_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_STATE_DIR = BRIDGE_ROOT / ".state"
 DEFAULT_TOKEN_FILE = DEFAULT_STATE_DIR / "bearer.token"
 DEFAULT_DB_FILE = DEFAULT_STATE_DIR / "bridge.sqlite3"
 
@@ -91,7 +91,10 @@ def _parse_cors_origins(value: str) -> tuple[str, ...]:
 
 
 def _safe_path(value: str, default: Path) -> Path:
-    return Path(value).expanduser() if value else default
+    if not value:
+        return default
+    candidate = Path(value).expanduser()
+    return candidate if candidate.is_absolute() else BRIDGE_ROOT / candidate
 
 
 def _write_secret(path: Path, value: str) -> None:
@@ -150,11 +153,18 @@ class Settings:
     javbus_allowed_hosts: frozenset[str]
     javbus_timeout_seconds: float
     javbus_max_response_bytes: int
+    nyaa_base_url: str = "https://nyaa.si"
+    nyaa_allowed_hosts: frozenset[str] = field(
+        default_factory=lambda: frozenset({"nyaa.si", "www.nyaa.si"})
+    )
+    nyaa_timeout_seconds: float = 15.0
+    nyaa_max_response_bytes: int = 2_000_000
+    nyaa_max_results: int = 20
 
     @classmethod
     def from_env(cls) -> "Settings":
         env_file_value = os.environ.get("PUSH115_BRIDGE_ENV_FILE", "")
-        env_file = _safe_path(env_file_value, ROOT / ".env")
+        env_file = _safe_path(env_file_value, BRIDGE_ROOT / ".env")
         file_values = _read_env_file(env_file)
         env = lambda name, default="": _env(name, default, file_values)
 
@@ -182,6 +192,26 @@ class Settings:
         configured_hosts.add(parsed_base.hostname.lower().rstrip("."))
         if parsed_base.hostname.lower().rstrip(".") in {"javbus.com", "www.javbus.com"}:
             configured_hosts.update({"javbus.com", "www.javbus.com"})
+
+        nyaa_base_url = env("PUSH115_NYAA_BASE_URL", "https://nyaa.si").rstrip("/")
+        parsed_nyaa = urlsplit(nyaa_base_url)
+        if (
+            parsed_nyaa.scheme.lower() != "https"
+            or not parsed_nyaa.hostname
+            or parsed_nyaa.username
+            or parsed_nyaa.password
+            or parsed_nyaa.query
+            or parsed_nyaa.fragment
+        ):
+            raise ValueError("PUSH115_NYAA_BASE_URL 必须是无凭据的 HTTPS 地址")
+        nyaa_hosts = {
+            item.strip().lower().rstrip(".")
+            for item in env("PUSH115_NYAA_ALLOWED_HOSTS", "").split(",")
+            if item.strip()
+        }
+        nyaa_hosts.add(parsed_nyaa.hostname.lower().rstrip("."))
+        if parsed_nyaa.hostname.lower().rstrip(".") in {"nyaa.si", "www.nyaa.si"}:
+            nyaa_hosts.update({"nyaa.si", "www.nyaa.si"})
 
         telegram_polling = env("PUSH115_TELEGRAM_POLLING", "0").lower() in {
             "1",
@@ -231,6 +261,21 @@ class Settings:
                     8_000_000,
                     int(env("PUSH115_JAVBUS_MAX_RESPONSE_BYTES", "2000000")),
                 ),
+            ),
+            nyaa_base_url=nyaa_base_url,
+            nyaa_allowed_hosts=frozenset(nyaa_hosts),
+            nyaa_timeout_seconds=max(
+                1.0, min(60.0, float(env("PUSH115_NYAA_TIMEOUT_SECONDS", "15")))
+            ),
+            nyaa_max_response_bytes=max(
+                32_768,
+                min(
+                    8_000_000,
+                    int(env("PUSH115_NYAA_MAX_RESPONSE_BYTES", "2000000")),
+                ),
+            ),
+            nyaa_max_results=max(
+                1, min(100, int(env("PUSH115_NYAA_MAX_RESULTS", "20")))
             ),
         )
 

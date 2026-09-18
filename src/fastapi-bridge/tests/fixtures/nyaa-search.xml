@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:nyaa="https://nyaa.si/xmlns">
+  <channel>
+    <title>Nyaa.si</title>
+    <item>
+      <title>[Group] Demo Episode 01 [1080p]</title>
+      <guid>https://nyaa.si/view/1001</guid>
+      <link>https://nyaa.si/download/1001.torrent</link>
+      <nyaa:magnet>magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&amp;dn=Demo%20Episode%2001</nyaa:magnet>
+    </item>
+    <item>
+      <title>[Group] Demo Episode 03 [1080p]</title>
+      <guid>https://nyaa.si/view/1002</guid>
+      <link>https://nyaa.si/download/1002.torrent</link>
+      <nyaa:infoHash>CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC</nyaa:infoHash>
+    </item>
+    <item>
+      <title>[Group] Demo Episode 02 [1080p]</title>
+      <guid>https://nyaa.si/view/1003</guid>
+      <link>magnet:?xt=urn:btih:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB&amp;dn=Demo%20Episode%2002</link>
+    </item>
+    <item>
+      <title>Duplicate hash without magnet</title>
+      <guid>https://nyaa.si/view/1004</guid>
+      <nyaa:infoHash>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA</nyaa:infoHash>
+    </item>
+  </channel>
+</rss>

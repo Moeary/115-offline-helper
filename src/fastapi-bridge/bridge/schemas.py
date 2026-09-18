@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .normalize import is_magnet, normalize_code
 
@@ -15,12 +15,12 @@ class StrictModel(BaseModel):
 
 class IntentModel(StrictModel):
     job_id: str = Field(..., alias="jobId", min_length=1, max_length=128)
-    source_site: Literal["javbus"] = Field("javbus", alias="sourceSite")
-    media_type: Literal["jav"] = Field("jav", alias="mediaType")
-    processor_profile: Literal["jav"] = Field("jav", alias="processorProfile")
+    source_site: Literal["javbus", "nyaa"] = Field("javbus", alias="sourceSite")
+    media_type: Literal["jav", "anime"] = Field("jav", alias="mediaType")
+    processor_profile: Literal["jav", "anime"] = Field("jav", alias="processorProfile")
     url: str = Field(..., min_length=1, max_length=8192)
     title: str = Field("", max_length=512)
-    code: str = Field(..., min_length=1, max_length=64)
+    code: str = Field("", max_length=64)
     metadata: dict[str, Any] = Field(default_factory=dict)
     save_path_cid: str | None = Field(None, alias="savePathCid")
 
@@ -35,10 +35,25 @@ class IntentModel(StrictModel):
     @field_validator("code")
     @classmethod
     def validate_code(cls, value: str) -> str:
+        if not value.strip():
+            return ""
         normalized = normalize_code(value)
         if not normalized:
             raise ValueError("intent.code 不是可识别的番号")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_route(self) -> "IntentModel":
+        route = (self.source_site, self.media_type, self.processor_profile)
+        if route == ("javbus", "jav", "jav"):
+            if not self.code:
+                raise ValueError("JavBus intent.code 不能为空")
+            return self
+        if route == ("nyaa", "anime", "anime"):
+            if self.code:
+                raise ValueError("Nyaa Anime intent.code 必须为空")
+            return self
+        raise ValueError("intent 来源、媒体类型和处理规则组合无效")
 
     @field_validator("save_path_cid")
     @classmethod

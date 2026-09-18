@@ -14,8 +14,11 @@ __pycache__/
 *.log
 
 # Local Telegram/bridge credentials, queue state and virtual environment
-bridge/.state/
-bridge/.venv/
-bridge/.env
-bridge/.testdeps/
-bridge/.testvenv/
+src/fastapi-bridge/.state/
+src/fastapi-bridge/.venv/
+src/fastapi-bridge/.env
+src/fastapi-bridge/.testdeps/
+src/fastapi-bridge/.testvenv/
+src/fastapi-bridge/.pytest_cache/
+src/fastapi-bridge/.pytest-tmp/
+src/fastapi-bridge/bridge/.pytest_cache/

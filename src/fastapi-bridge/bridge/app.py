@@ -13,6 +13,7 @@ from .auth import authenticate
 from .config import Settings
 from .db import LeaseConflict, QueueStore, StateConflict, UnknownJob
 from .providers.javbus import JavBusProvider
+from .providers.nyaa import NyaaRssProvider
 from .schemas import ClaimRequest, EventRequest
 from .telegram import HttpTelegramTransport, TelegramService
 
@@ -46,6 +47,7 @@ def create_app(
     *,
     store: QueueStore | None = None,
     provider: Any | None = None,
+    anime_provider: Any | None = None,
     telegram_service: TelegramService | None = None,
 ) -> FastAPI:
     """Create an isolated app instance suitable for production or tests.
@@ -66,16 +68,28 @@ def create_app(
         timeout_seconds=settings.javbus_timeout_seconds,
         max_response_bytes=settings.javbus_max_response_bytes,
     )
+    owns_anime_provider = False
+    nyaa_provider = anime_provider
     owns_telegram_transport = False
     transport = None
     service = telegram_service
     if service is None and settings.telegram_bot_token:
+        if nyaa_provider is None:
+            nyaa_provider = NyaaRssProvider(
+                settings.nyaa_base_url,
+                allowed_hosts=settings.nyaa_allowed_hosts,
+                timeout_seconds=settings.nyaa_timeout_seconds,
+                max_response_bytes=settings.nyaa_max_response_bytes,
+                max_results=settings.nyaa_max_results,
+            )
+            owns_anime_provider = True
         transport = HttpTelegramTransport(settings.telegram_bot_token)
         owns_telegram_transport = True
         service = TelegramService(
             queue,
             av_provider,
             transport,
+            anime_provider=nyaa_provider,
             allowed_chat_ids=settings.telegram_allowed_chat_ids,
             allowed_user_ids=settings.telegram_allowed_user_ids,
             callback_ttl_seconds=settings.callback_ttl_seconds,
@@ -105,6 +119,8 @@ def create_app(
                 await transport.aclose()
             if owns_provider and hasattr(av_provider, "aclose"):
                 await av_provider.aclose()
+            if owns_anime_provider and nyaa_provider is not None and hasattr(nyaa_provider, "aclose"):
+                await nyaa_provider.aclose()
             if owns_store:
                 queue.close()
 
@@ -127,6 +143,7 @@ def create_app(
     app.state.settings = settings
     app.state.store = queue
     app.state.provider = av_provider
+    app.state.anime_provider = nyaa_provider
     app.state.telegram = service
 
     async def require_auth(authorization: str | None = Header(default=None)) -> None:

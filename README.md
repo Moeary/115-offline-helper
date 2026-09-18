@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.7.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.8.0-orange" alt="Version">
 </p>
 
 ---
@@ -140,7 +140,18 @@ pixi run deploy
 
 扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。Bridge 默认关闭；在设置页启用时，浏览器只请求 `http://127.0.0.1/*` 可选权限，传输地址和端口仍固定，Bearer token 只保存在本地设置并由 service worker 使用，不会注入网页或转发 Cookie。
 
-设置页可填写 token 和目标目录 CID。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有 `processorProfile: jav`、`metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Bridge 的 Windows 启动、token、Telegram allowlist 和 CORS 配置见 [`bridge/README.md`](bridge/README.md)。
+设置页可填写 token 和目标目录 CID。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile`（`/av` 为 `jav`、`/anime` 为 `anime`）和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Bridge 的 Telegram `/av` 查询 JavBus，`/anime 关键词` 查询受限的 Nyaa RSS，并将 Anime 任务固定为 `sourceSite=nyaa`、`mediaType=anime`、`processorProfile=anime`；Windows 启动、token、Telegram allowlist、Nyaa 来源和 CORS 配置见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
+
+在仓库根目录使用 Pixi 启动 Bridge：
+
+```powershell
+pixi install
+Copy-Item src\fastapi-bridge\.env.example src\fastapi-bridge\.env
+pixi run bridge-token
+pixi run bridge-start
+```
+
+状态、数据库和 token 默认保存在 `src/fastapi-bridge/.state`；测试使用 `pixi run bridge-test`。
 
 ### 权限说明
 

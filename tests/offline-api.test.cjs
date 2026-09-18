@@ -124,6 +124,10 @@ function bridgeEnvironment(finalResponse) {
 						leaseId: 'lease-real-offline',
 						intent: {
 							url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef',
+							sourceSite: 'javbus',
+							mediaType: 'jav',
+							processorProfile: 'jav',
+							code: 'ABC-123',
 						},
 					},
 				})

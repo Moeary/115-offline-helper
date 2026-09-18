@@ -8,6 +8,7 @@ pydantic = pytest.importorskip("pydantic")
 
 from bridge.db import QueueStore
 from bridge.providers.base import AvMetadata, MagnetCandidate
+from bridge.providers.nyaa import NyaaSearchResult
 from bridge.telegram import TelegramService
 
 
@@ -57,6 +58,24 @@ class FakeProvider:
         )
 
 
+class FakeAnimeProvider:
+    async def search(self, keyword):
+        return NyaaSearchResult(
+            keyword=keyword,
+            feed_url="https://nyaa.si/?page=rss&q=demo",
+            candidates=(
+                MagnetCandidate(
+                    url="magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    title="[Group] Demo 01",
+                    btih="b" * 32,
+                    dedupe_key="btih:" + "b" * 32,
+                    guid="https://nyaa.si/view/2001",
+                    detail_url="https://nyaa.si/view/2001",
+                ),
+            ),
+        )
+
+
 def test_av_selection_is_bound_to_user_and_one_time() -> None:
     store = QueueStore(":memory:")
     transport = FakeTransport()
@@ -92,5 +111,43 @@ def test_av_selection_is_bound_to_user_and_one_time() -> None:
             {"update_id": 4, "message": {"chat": {"id": 99}, "from": {"id": 22}, "text": "/av ABC-123"}}
         ))
         assert unauthorized["reason"] == "unauthorized"
+    finally:
+        store.close()
+
+
+def test_anime_search_uses_explicit_anime_intent_profile() -> None:
+    store = QueueStore(":memory:")
+    transport = FakeTransport()
+    service = TelegramService(
+        store,
+        FakeProvider(),
+        transport,
+        anime_provider=FakeAnimeProvider(),
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        clock=lambda: 50,
+    )
+    try:
+        result = asyncio.run(service.handle_update(
+            {"update_id": 1, "message": {"chat": {"id": 11}, "from": {"id": 22}, "text": "/anime Demo"}}
+        ))
+        assert result["kind"] == "anime"
+        keyboard = transport.messages[0][3]
+        callback = {
+            "id": "cb-anime",
+            "from": {"id": 22},
+            "data": keyboard["inline_keyboard"][0][0]["callback_data"],
+            "message": {"message_id": 101, "chat": {"id": 11}},
+        }
+        selected = asyncio.run(service.handle_update({"update_id": 2, "callback_query": callback}))
+        assert selected["duplicate"] is False
+        job = store.list_jobs()[0]
+        assert job.intent["sourceSite"] == "nyaa"
+        assert job.intent["mediaType"] == "anime"
+        assert job.intent["processorProfile"] == "anime"
+        assert job.intent["code"] == ""
+        assert job.intent["metadata"]["provider"] == "nyaa"
+        assert job.intent["metadata"]["originalTitle"] == "[Group] Demo 01"
+        assert job.intent["metadata"]["btih"] == "b" * 32
     finally:
         store.close()

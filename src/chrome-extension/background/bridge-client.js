@@ -318,25 +318,44 @@
 	function safeIntent(rawIntent, jobId, targetCid) {
 		const input = rawIntent?.intent && typeof rawIntent.intent === 'object' ? rawIntent.intent : rawIntent
 		const source = input && typeof input === 'object' && !Array.isArray(input) ? input : {}
-		const safeSource = { ...source }
-		for (const name of Object.keys(safeSource)) {
-			if (/token|authorization|cookie|secret|headers/i.test(name)) delete safeSource[name]
+		const scrubObject = (value, depth = 0) => {
+			if (depth > 6) return null
+			if (value === null || value === undefined) return value
+			if (Array.isArray(value)) return value.slice(0, 100).map(item => scrubObject(item, depth + 1))
+			if (typeof value !== 'object') return value
+			const result = {}
+			for (const [name, item] of Object.entries(value)) {
+				if (/token|authorization|cookie|secret|headers|password|credential|auth/i.test(name)) continue
+				result[name] = scrubObject(item, depth + 1)
+			}
+			return result
 		}
-		const metadataSource = source.metadata && typeof source.metadata === 'object' && !Array.isArray(source.metadata)
-			? source.metadata : {}
-		const metadata = { ...metadataSource }
-		for (const name of Object.keys(metadata)) {
-			if (/token|authorization|cookie|secret/i.test(name)) delete metadata[name]
+		const safeSource = scrubObject(source)
+		const requestedRoute = [
+			String(safeSource.sourceSite || '').trim().toLowerCase(),
+			String(safeSource.mediaType || '').trim().toLowerCase(),
+			String(safeSource.processorProfile || '').trim().toLowerCase(),
+		]
+		const validJav = requestedRoute[0] === 'javbus' && requestedRoute[1] === 'jav' && requestedRoute[2] === 'jav'
+		const validAnime = requestedRoute[0] === 'nyaa' && requestedRoute[1] === 'anime' && requestedRoute[2] === 'anime'
+		if (!validJav && !validAnime) {
+			throw bridgeError('bridge intent 路由无效', 'BRIDGE_INVALID_INTENT')
 		}
+		const route = validAnime
+			? { sourceSite: 'nyaa', mediaType: 'anime', processorProfile: 'anime' }
+			: { sourceSite: 'javbus', mediaType: 'jav', processorProfile: 'jav' }
+		const metadata = safeSource.metadata && typeof safeSource.metadata === 'object' && !Array.isArray(safeSource.metadata)
+			? safeSource.metadata : {}
 		metadata.bridgeJobId = jobId
 		metadata.monitorDownload = true
 		return {
 			...safeSource,
 			jobId,
-			sourceSite: String(safeSource.sourceSite || 'javbus').trim().toLowerCase() || 'javbus',
+			sourceSite: route.sourceSite,
 			url: String(source.url || source.magnet || '').trim(),
-			mediaType: 'jav',
-			processorProfile: 'jav',
+			mediaType: route.mediaType,
+			processorProfile: route.processorProfile,
+			code: route.mediaType === 'anime' ? '' : String(safeSource.code || '').trim(),
 			savePathCid: normalizeCid(targetCid || source.savePathCid, '0'),
 			metadata,
 		}

@@ -115,6 +115,10 @@ const job = (jobId = 'job-1') => ({
 	intent: {
 		url: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef&dn=ABC-123',
 		title: 'ABC-123',
+		sourceSite: 'javbus',
+		mediaType: 'jav',
+		processorProfile: 'jav',
+		code: 'ABC-123',
 	},
 })
 
@@ -229,6 +233,99 @@ test('claim submits once with explicit jav profile, target CID, and monitor meta
 	// but must never call Router.submitIntent a second time.
 	await e.client.processPending()
 	assert.equal(e.routerCalls.length, 1)
+})
+
+test('claim preserves only the explicit Nyaa Anime route and removes nested secrets', async () => {
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token', push115_bridge_target_cid: '42' },
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/claim')) return response({ schema: 1, job: e.pendingJob })
+			if (url.includes('/events')) return response({ schema: 1 })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	e.pendingJob = {
+		...job('anime-job'),
+		intent: {
+			url: 'magnet:?xt=urn:btih:abcdefabcdefabcdefabcdefabcdefab',
+			title: 'Anime 01',
+			sourceSite: 'nyaa',
+			mediaType: 'anime',
+			processorProfile: 'anime',
+			code: 'SHOULD-BE-CLEARED',
+			metadata: {
+				provider: 'nyaa',
+				originalTitle: 'Anime 01',
+				credentials: { token: 'do-not-forward' },
+				cookie: 'do-not-forward',
+			},
+		},
+	}
+	await e.client.processPending()
+	assert.equal(e.routerCalls.length, 1)
+	assert.equal(e.routerCalls[0].sourceSite, 'nyaa')
+	assert.equal(e.routerCalls[0].mediaType, 'anime')
+	assert.equal(e.routerCalls[0].processorProfile, 'anime')
+	assert.equal(e.routerCalls[0].code, '')
+	assert.equal(e.routerCalls[0].metadata.provider, 'nyaa')
+	assert.equal(e.routerCalls[0].metadata.credentials, undefined)
+	assert.equal(e.routerCalls[0].metadata.cookie, undefined)
+})
+
+test('deeply nested bridge secrets are truncated before Router submission', async () => {
+	const deep = {}
+	let cursor = deep
+	for (let index = 0; index < 9; index += 1) {
+		cursor.next = {}
+		cursor = cursor.next
+	}
+	cursor.token = 'deep-secret-must-not-appear'
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/claim')) return response({ schema: 1, job: e.pendingJob })
+			if (url.includes('/events')) return response({ schema: 1 })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	e.pendingJob = {
+		...job('deep-secret-job'),
+		intent: {
+			...job('deep-secret-job').intent,
+			sourceSite: 'javbus',
+			mediaType: 'jav',
+			processorProfile: 'jav',
+			code: 'ABC-123',
+			metadata: { deep },
+		},
+	}
+	await e.client.processPending()
+	assert.equal(e.routerCalls.length, 1)
+	assert.equal(JSON.stringify(e.routerCalls[0]).includes('deep-secret-must-not-appear'), false)
+})
+
+test('invalid bridge intent route is rejected before Router submission', async () => {
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/claim')) return response({ schema: 1, job: e.pendingJob })
+			if (url.includes('/events')) return response({ schema: 1 })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	e.pendingJob = {
+		...job('invalid-route-job'),
+		intent: {
+			...job('invalid-route-job').intent,
+			sourceSite: 'nyaa',
+			mediaType: 'jav',
+			processorProfile: 'jav',
+			code: 'ABC-123',
+		},
+	}
+	const result = await e.client.processPending()
+	assert.equal(result.error, 'BRIDGE_INVALID_INTENT')
+	assert.equal(e.routerCalls.length, 0)
 })
 
 test('generic Router submission errors become uncertain after the submission boundary', async () => {

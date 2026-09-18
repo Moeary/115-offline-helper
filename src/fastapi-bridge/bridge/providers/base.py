@@ -16,14 +16,21 @@ class MagnetCandidate:
     title: str
     btih: str
     dedupe_key: str
+    guid: str = ""
+    detail_url: str = ""
 
     def as_dict(self) -> dict[str, str]:
-        return {
+        value = {
             "url": self.url,
             "title": self.title,
             "btih": self.btih,
             "dedupeKey": self.dedupe_key,
         }
+        if self.guid:
+            value["guid"] = self.guid
+        if self.detail_url:
+            value["detailUrl"] = self.detail_url
+        return value
 
 
 @dataclass(frozen=True)
