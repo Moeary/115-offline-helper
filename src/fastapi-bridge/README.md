@@ -13,10 +13,10 @@ Bridge Intent 只接受严格的 BTIH Magnet 或 ED2K file 链接。扩展设置
 
 ```powershell
 pixi install
-pixi run bridge-start
+pixi run start
 ```
 
-Bridge 首次启动会在终端打印 5 分钟内有效的一次性 Crockford 配对码。打开扩展设置页，检查本地 Bridge 并输入配对码；Bearer token 会自动保存到扩展本地。浏览器重装后可用 `pixi run bridge-pair` 显式打开新的配对窗口。Telegram Bot Token 在扩展设置页填写，Bridge 会用 `getMe` 校验并动态启动 polling。
+Bridge 首次启动会在终端打印 5 分钟内有效的一次性 Crockford 配对码。打开扩展设置页，检查本地 Bridge 并输入配对码；Bearer token 会自动保存到扩展本地。浏览器重装后可用 `pixi run pair` 显式打开新的配对窗口。Telegram Bot Token 在扩展设置页填写，Bridge 会用 `getMe` 校验并动态启动 polling。
 
 `.env.example` 仅供高级配置使用。环境变量仍可覆盖 provider、数据库、超时、静态目录 fallback 等选项，例如：
 
@@ -35,7 +35,7 @@ Windows 文件访问权限取决于当前用户和目录 ACL，请将整个 `src
 运行测试使用根 Pixi 环境：
 
 ```powershell
-pixi run bridge-test
+pixi run test
 ```
 
 ## HTTP 契约
@@ -49,7 +49,7 @@ POST /bootstrap/pair  {"schema":1,"pairingCode":"K7MP-4Q2D","clientId":"..."}
 
 配对码单次使用，有效期 5 分钟，最多允许 5 次失败。成功响应包含一次性的
 `bearerToken`；之后所有 `/v1/*` 请求仍必须使用 `Authorization: Bearer ...`。
-配对完成后，只有显式运行 `pixi run bridge-pair` 才会重新打开配对窗口。
+配对完成后，只有显式运行 `pixi run pair` 才会重新打开配对窗口。
 `GET /v1/runtime/telegram` 返回 `enabled`、`configured`、`botUsername`、`ownerBound`
 和管理员认领链接（不返回 token）；`PUT /v1/runtime/telegram` 接收 `enabled` 与可选
 `botToken`，会校验 `getMe` 后动态停止、启动或重启 polling。
@@ -100,6 +100,61 @@ Content-Type: application/json
 115 云端离线任务。`GET /healthz` 只报告本地进程是否可响应。
 
 ## Telegram
+
+### 从零配置与使用
+
+下面的流程适合首次使用。普通用户只需要一次配对码和一个 Telegram Bot Token，
+不需要查 Extension ID、填写 chat/user ID 或手工编辑 `.env`。
+
+1. 在仓库根目录安装并启动 Bridge：
+
+   ```powershell
+   pixi install
+   pixi run start
+   ```
+
+   保持这个终端和 Bridge 进程运行。终端会打印一次性配对码，配对码有效 5 分钟，
+   最多允许 5 次错误尝试。
+2. 打开扩展设置页，在“本地自动任务 Bridge”中点击“检查 Bridge”，输入终端里的配对码，
+   再点击“配对并启用”；首次操作时允许扩展访问 `http://127.0.0.1/*`。
+   配对成功后 Bearer token 会保存到扩展本地，不需要复制到 README 或 `.env`。
+3. 在 Telegram 中打开 `@BotFather`，发送 `/newbot`，按提示填写机器人显示名和用户名，
+   复制 BotFather 返回的 HTTP API Token。Token 是秘密凭据，不要发到群组、截图或提交到 Git。
+4. 回到扩展设置页的“Telegram Bot”，将 Token 粘贴到密码框，点击“连接 Telegram”。
+   Bridge 会调用 Telegram `getMe` 校验 Token，并动态启动 polling；成功后设置页会显示
+   机器人的用户名和一次性管理员认领链接。
+5. 点击“打开 Telegram 绑定管理员”，在机器人私聊中点击 Start（或发送该链接），看到
+   “已绑定为管理员”后才可以使用命令。管理员认领链接只应发给自己的 Telegram 账号。
+6. 在扩展设置页保持 115 登录状态并点击“扫描目录”，让目录快照同步到 Bridge；然后在机器人中
+   发送 `/dir`，用按钮选择默认保存目录。没有目录快照时，机器人会提示先打开扩展同步目录。
+
+浏览器中的扩展必须保持启用，115 登录态和 Bridge 进程也必须保持可用；Telegram 只负责查询和
+入队，实际提交 115 仍由 Chrome 扩展完成。更换 Bot Token 会清除旧管理员，连接新 Token 后
+需要重新点击认领链接。
+
+支持的命令如下：
+
+| 命令 | 用途 |
+|------|------|
+| `/av ABC-123` | 在 JavBus 查询番号，点击候选按钮后入队 |
+| `/anime One Piece` | 使用 Nyaa RSS 查询关键词，点击 Magnet 候选按钮后入队 |
+| `/dir` 或 `/path` | 浏览目录树、选择当前保存目录 |
+| `/add <Magnet 或 ED2K>` | 将明确的 Magnet/ED2K 链接直接入队 |
+| `/jobs` | 查看本 Telegram 账号创建的任务；详情可重试失败任务或取消活动任务 |
+
+`/av`、`/anime` 和 `/add` 使用当前选择的目录；`/dir` 的按钮包含目录分页和返回上级操作。
+Telegram 按钮带有账号、消息和有效期校验，转发或重复点击过期按钮不会入队。
+
+### 常见问题
+
+- **扩展提示 Bridge 不可达**：确认 `pixi run start` 的终端仍在运行，且本机 `52115` 端口
+  没有被其他进程占用；在设置页重新点击“检查 Bridge”。
+- **配对码无效或过期**：停止旧 Bridge 后重新运行 `pixi run pair`，再在设置页输入新码。
+  不要在已有 Bridge 进程运行时再启动第二个实例。
+- **Bot 没有回应**：在设置页点击“刷新状态”，确认 Bot 已配置、polling 已启动且管理员已认领；
+  检查 Token 是否完整复制自 BotFather。若 Token 泄露，应在 BotFather 撤销并换发后重新配置。
+- **`/dir` 提示没有目录**：保持 115 登录，回扩展设置页重新扫描目录，等待同步完成后再发送 `/dir`。
+- **任务停留在等待**：确认 Chrome 未退出、扩展已启用、115 仍登录，并在设置页勾选“启用本地服务连接”。
 
 Bridge 默认没有 Telegram 配置。扩展设置页填写 Bot Token 后，Bridge 会校验并动态启动 polling；
 不再要求普通用户填写 chat/user allowlist。配置成功后，设置页会显示

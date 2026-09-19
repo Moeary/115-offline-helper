@@ -126,12 +126,34 @@ Start the Bridge from the repository root with Pixi:
 
 ```powershell
 pixi install
-pixi run bridge-start
+pixi run start
 ```
 
-On first start the terminal prints a pairing code valid for five minutes. Open the extension settings, check Bridge, and enter the code. After reinstalling the browser extension, run `pixi run bridge-pair` to open a new pairing window. Advanced users can still use `.env.example` for provider, database, and timeout overrides.
+#### First-time Telegram bot setup
 
-State, the database and the token are stored under `src/fastapi-bridge/.state` by default; run tests with `pixi run bridge-test`.
+1. In a private chat with `@BotFather`, send `/newbot`, follow the prompts for the bot name and username, and copy the HTTP API Token. Treat it as a secret: do not post it in a group, screenshot it, or commit it to Git.
+2. On first start, the terminal prints a one-time pairing code valid for five minutes, with at most five failed attempts. Open the extension settings, click **Check Bridge** in **Local automation Bridge**, enter the code, and click **Pair and enable**; approve the optional `http://127.0.0.1/*` permission when Chrome asks.
+3. In the **Telegram Bot** section of the same settings page, paste the Bot Token and click **Connect Telegram**. Bridge validates it with `getMe`, starts polling dynamically, and shows the bot username plus a one-time owner-claim link.
+4. Click **Open Telegram owner binding**, open the bot in a private chat, and press **Start** (or send the link). Wait for **已绑定为管理员** before using commands. Keep the claim link private.
+5. Keep 115 logged in, the Chrome extension enabled, and the Bridge terminal running. In extension settings click **Scan directories**, wait for the snapshot to sync, then send `/dir` to the bot and choose the default save directory.
+
+If the browser extension is reinstalled or loses its local pairing, first stop the existing Bridge with `Ctrl+C`, then run `pixi run pair` to open a new pairing window; do not run two Bridge instances at once. Replacing the Bot Token clears the old owner, so claim the new bot again. Advanced users can still use `.env.example` for provider, database, and timeout overrides.
+
+#### Telegram bot commands
+
+| Command | Purpose |
+|---------|---------|
+| `/av ABC-123` | Search JavBus and queue a selected candidate |
+| `/anime One Piece` | Search the configured Nyaa RSS source and queue a selected Magnet |
+| `/dir` or `/path` | Browse the directory tree and choose the current save directory |
+| `/add <Magnet or ED2K>` | Queue an explicit Magnet or ED2K link |
+| `/jobs` | List jobs created by the current Telegram account; retry failed jobs or cancel active ones from details |
+
+Choose a directory with `/dir` before using `/av`, `/anime`, or `/add`. Result buttons are bound to the original account and message for a limited time; forwarding or clicking them again cannot enqueue a duplicate. Telegram only searches and queues work; the Chrome extension performs the actual 115 submission. Cancelling an active job stops local monitoring but does not cancel an offline task already submitted to 115.
+
+If the bot does not respond, refresh Telegram status in Settings and confirm that the Bot is configured, polling is running, and the owner has claimed it. If `/dir` reports that no directories are available, keep 115 logged in and scan directories again. If the extension cannot reach Bridge, confirm that `pixi run start` is still running and that local port `52115` is not occupied by another process. If the Bot Token is exposed, revoke and replace it through `@BotFather`, then connect the new token in Settings.
+
+State, the database and the token are stored under `src/fastapi-bridge/.state` by default; run tests with `pixi run test`.
 
 Generic uses optional `<all_urls>` permission. Dedicated site enhancements use optional host permissions, with a one-time `activeTab` fallback for the current HTTP(S) page when the popup is opened. OpenBT has no separate profile and follows Generic when that permission is enabled.
 

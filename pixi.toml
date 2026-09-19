@@ -18,7 +18,7 @@ clean = "python scripts/clean.py"
 # Keep Python bytecode, pytest's cache, and temporary test trees together
 # under the repository cache directory instead of scattering dot-folders in
 # the Bridge source tree.
-bridge-token = { cmd = "python -m bridge.main --print-token", cwd = "src/fastapi-bridge", env = { PYTHONPYCACHEPREFIX = "../../.cache/pixi/pycache" } }
-bridge-pair = { cmd = "python -m bridge.main --pair", cwd = "src/fastapi-bridge", env = { PYTHONPYCACHEPREFIX = "../../.cache/pixi/pycache" } }
-bridge-start = { cmd = "python -m bridge.main", cwd = "src/fastapi-bridge", env = { PYTHONPYCACHEPREFIX = "../../.cache/pixi/pycache" } }
-bridge-test = { cmd = "python -m pytest -q tests -o cache_dir=../../.cache/pixi/pytest --basetemp=../../.cache/pixi/pytest-tmp", cwd = "src/fastapi-bridge", env = { PYTHONPYCACHEPREFIX = "../../.cache/pixi/pycache" } }
+token = { cmd = "python -m bridge.main --print-token", cwd = "src/fastapi-bridge", env = { PYTHONPYCACHEPREFIX = "../../.cache/pixi/pycache" } }
+pair = { cmd = "python -m bridge.main --pair", cwd = "src/fastapi-bridge", env = { PYTHONPYCACHEPREFIX = "../../.cache/pixi/pycache" } }
+start = { cmd = "python -m bridge.main", cwd = "src/fastapi-bridge", env = { PYTHONPYCACHEPREFIX = "../../.cache/pixi/pycache" } }
+test = { cmd = "python -m pytest -q tests -o cache_dir=../../.cache/pixi/pytest --basetemp=../../.cache/pixi/pytest-tmp", cwd = "src/fastapi-bridge", env = { PYTHONPYCACHEPREFIX = "../../.cache/pixi/pycache" } }

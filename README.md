@@ -146,12 +146,34 @@ pixi run deploy
 
 ```powershell
 pixi install
-pixi run bridge-start
+pixi run start
 ```
 
-首次启动时终端会显示 5 分钟内有效的一次性配对码；打开扩展设置页，检查 Bridge 并输入该配对码。浏览器重装后可显式运行 `pixi run bridge-pair` 重新打开配对窗口。高级用户仍可使用 `.env.example` 覆盖 provider、数据库和超时配置。
+#### Telegram 机器人首次配置
 
-状态、数据库和 token 默认保存在 `src/fastapi-bridge/.state`；测试使用 `pixi run bridge-test`。
+1. 在 Telegram 私聊 `@BotFather`，发送 `/newbot`，按提示填写机器人名称和用户名，复制返回的 HTTP API Token。Token 是秘密凭据，不要发到群组、截图或提交到 Git。
+2. 首次启动时，终端会显示 5 分钟内有效、最多允许 5 次失败的一次性配对码。打开扩展设置页，在“本地自动任务 Bridge”中点击“检查 Bridge”，输入配对码，再点击“配对并启用”；首次操作时允许 `http://127.0.0.1/*` 可选权限。
+3. 在同一设置页的“Telegram Bot”区域粘贴 Bot Token，点击“连接 Telegram”。Bridge 会调用 `getMe` 校验 Token，成功后动态启动 polling，并显示机器人用户名和一次性管理员认领链接。
+4. 点击“打开 Telegram 绑定管理员”，在机器人私聊中点击 **Start**（或发送该链接），看到“已绑定为管理员”后再使用机器人命令。认领链接只应发给自己的 Telegram 账号。
+5. 保持 115 登录、Chrome 扩展启用和 Bridge 终端运行。在扩展设置页点击“扫描目录”，等待目录同步完成，再在机器人中发送 `/dir` 选择默认保存目录。
+
+浏览器重装或丢失本地配对信息时，先按 `Ctrl+C` 停止已有 Bridge，再运行 `pixi run pair` 打开新的配对窗口；不要同时启动两个 Bridge 实例。更换 Bot Token 会清除旧管理员，重新连接后必须再次点击认领链接。高级用户仍可使用 `.env.example` 覆盖 provider、数据库和超时配置。
+
+#### Telegram 机器人命令
+
+| 命令 | 用途 |
+|------|------|
+| `/av ABC-123` | 在 JavBus 查询番号，点击候选按钮后入队 |
+| `/anime One Piece` | 使用 Nyaa RSS 查询关键词，点击 Magnet 候选按钮后入队 |
+| `/dir` 或 `/path` | 浏览目录树并选择当前保存目录 |
+| `/add <Magnet 或 ED2K>` | 将明确的 Magnet/ED2K 链接直接入队 |
+| `/jobs` | 查看当前 Telegram 账号创建的任务；详情可重试失败任务或取消活动任务 |
+
+先用 `/dir` 选择目录，再使用 `/av`、`/anime` 或 `/add`。查询结果中的按钮只对原账号、原消息在有效期内有效，转发或重复点击不会重复入队。Telegram 只负责查询和入队，实际提交 115 由 Chrome 扩展完成；取消进行中的任务只停止本地监控，不会取消已经提交到 115 的云端离线任务。
+
+若机器人无响应，请在设置页点击“刷新状态”，确认 Bot 已配置、polling 已启动且管理员已认领；若 `/dir` 提示没有目录，请保持 115 登录并重新扫描目录。若扩展提示 Bridge 不可达，确认 `pixi run start` 的终端仍在运行且本机 `52115` 端口未被其他程序占用。若 Bot Token 泄露，请在 `@BotFather` 撤销并换发，再回设置页重新连接。
+
+状态、数据库和 token 默认保存在 `src/fastapi-bridge/.state`；测试使用 `pixi run test`。
 
 ### 权限说明
 

@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     pairing = application.state.pairing_manager
     if args.pair:
         try:
-            # An explicit ``bridge-pair`` command is the documented recovery
+            # An explicit ``pixi run pair`` command is the documented recovery
             # path after a browser reinstall.  It rotates the pairing window;
             # the old Bearer token remains valid until a new client pairs.
             pairing.open_window(force=True)
