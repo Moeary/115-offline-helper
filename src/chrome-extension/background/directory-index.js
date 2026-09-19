@@ -8,6 +8,8 @@
 	const CID_PATTERN = /^\d{1,64}$/
 	const MAX_ROOTS = 32
 	const MAX_DIRECTORIES = 4000
+	const MAX_REQUESTS = 5000
+	const MAX_DURATION_MS = 5 * 60 * 1000
 	const MAX_DEPTH = 32
 	const MAX_NAME_LENGTH = 256
 	const MAX_PATH_LENGTH = 4096
@@ -133,6 +135,48 @@
 		return result
 	}
 
+	function removeSubtree(byCid, rootCid) {
+		const root = byCid.get(rootCid)
+		const prefix = root?.path ? `${root.path}/` : ''
+		const removed = new Set([rootCid])
+		let changed = true
+		while (changed) {
+			changed = false
+			for (const [cid, item] of byCid) {
+				if (removed.has(cid)) continue
+				const parentCid = normalizeCid(item.parentCid)
+				if (removed.has(parentCid) || (prefix && item.path.startsWith(prefix))) {
+					removed.add(cid)
+					changed = true
+				}
+			}
+		}
+		for (const cid of removed) byCid.delete(cid)
+	}
+
+	function removeMissingChildren(byCid, parentCid, observedCids) {
+		for (const [cid, item] of [...byCid]) {
+			if (item.parentCid === parentCid && !observedCids.has(cid)) removeSubtree(byCid, cid)
+		}
+	}
+
+	function rewriteSubtreePaths(byCid, rootCid, rootPath, rootDepth) {
+		const pending = [{ cid: rootCid, path: rootPath, depth: rootDepth }]
+		const visited = new Set([rootCid])
+		while (pending.length > 0) {
+			const parent = pending.shift()
+			for (const [cid, item] of [...byCid]) {
+				if (visited.has(cid) || item.parentCid !== parent.cid) continue
+				const path = joinPath(parent.path, item.name)
+				if (!path) continue
+				const depth = Math.min(MAX_DEPTH, parent.depth + 1)
+				byCid.set(cid, { ...item, path, depth })
+				visited.add(cid)
+				pending.push({ cid, path, depth })
+			}
+		}
+	}
+
 	async function syncBridge(index) {
 		const sync = background.BridgeClient?.syncDirectoryRegistry
 		if (typeof sync !== 'function') return { skipped: true, reason: 'bridge_unavailable' }
@@ -160,22 +204,6 @@
 			const roots = normalizeRoots(details.roots ?? details.rootCids ?? ['0'])
 			const maxDepth = clampDepth(details.maxDepth ?? details.depth, 1)
 			const byCid = new Map(current.directories.map(item => [item.cid, item]))
-			// A successful scan is authoritative for the requested subtree. Drop
-			// stale descendants before merging the fresh listing, while retaining
-			// the selected non-root record itself as the parent of newly discovered
-			// children.
-			for (const root of roots) {
-				if (root === '0') {
-					byCid.clear()
-					break
-				}
-				const rootRecord = byCid.get(root)
-				if (!rootRecord) continue
-				const prefix = `${rootRecord.path}/`
-				for (const [cid, item] of byCid) {
-					if (cid !== root && (item.path === rootRecord.path || item.path.startsWith(prefix))) byCid.delete(cid)
-				}
-			}
 			const queue = roots.map(cid => ({
 				cid,
 				parentCid: null,
@@ -183,13 +211,38 @@
 				depth: 0,
 			}))
 			const visited = new Set()
+			const startedAt = Date.now()
+			let scanned = 0
+			let requests = 0
+			let reason = null
+			const markBudget = candidate => {
+				if (!reason && candidate) reason = candidate
+				return Boolean(reason)
+			}
+			const stopBeforeRead = () => {
+				if (reason) return true
+				if (Date.now() - startedAt >= MAX_DURATION_MS) return markBudget('duration_limit')
+				if (scanned >= MAX_DIRECTORIES) return markBudget('directory_limit')
+				if (requests >= MAX_REQUESTS) return markBudget('request_limit')
+				return false
+			}
+			const stopAfterRead = () => {
+				if (reason) return true
+				return Date.now() - startedAt >= MAX_DURATION_MS && markBudget('duration_limit')
+			}
 			while (queue.length > 0) {
 				const currentFolder = queue.shift()
 				if (!currentFolder || visited.has(currentFolder.cid)) continue
+				if (stopBeforeRead()) break
 				visited.add(currentFolder.cid)
+				scanned += 1
+				requests += 1
 				const listing = await background.Folders.read(currentFolder.cid)
+				stopAfterRead()
 				const basePath = currentFolder.path || breadcrumbPath(listing?.path, currentFolder.cid)
 				const items = Array.isArray(listing?.items) ? listing.items : []
+				const children = []
+				const observedCids = new Set()
 				for (const item of items) {
 					if (!background.Folders.isFolder(item)) continue
 					const cid = normalizeCid(background.Folders.cidOf(item))
@@ -197,18 +250,34 @@
 					if (!cid || cid === '0' || !name) continue
 					const path = joinPath(basePath, name)
 					if (!path) continue
-					const record = {
+					if (observedCids.has(cid)) continue
+					observedCids.add(cid)
+					children.push({
 						cid,
 						parentCid: currentFolder.cid,
 						name,
 						path,
 						depth: Math.min(MAX_DEPTH, currentFolder.depth + 1),
+					})
+				}
+				removeMissingChildren(byCid, currentFolder.cid, observedCids)
+				for (const record of children) {
+					const existing = byCid.get(record.cid)
+					if (!existing && byCid.size >= MAX_DIRECTORIES) {
+						markBudget('entry_limit')
+						continue
 					}
-					if (!byCid.has(cid) || byCid.get(cid)?.parentCid === currentFolder.cid) byCid.set(cid, record)
-					if (currentFolder.depth + 1 < maxDepth && !visited.has(cid)) {
-						queue.push({ cid, parentCid: currentFolder.cid, path, depth: currentFolder.depth + 1 })
+					const pathOwner = [...byCid.values()].find(item => item.path === record.path && item.cid !== record.cid)
+					if (pathOwner) continue
+					if (existing && existing.path !== record.path) {
+						rewriteSubtreePaths(byCid, record.cid, record.path, record.depth)
+					}
+					byCid.set(record.cid, record)
+					if (!reason && currentFolder.depth + 1 < maxDepth && !visited.has(record.cid)) {
+						queue.push({ cid: record.cid, parentCid: currentFolder.cid, path: record.path, depth: record.depth })
 					}
 				}
+				if (reason) break
 			}
 			const next = normalizeIndex({
 				schema: 1,
@@ -218,7 +287,15 @@
 				directories: [...byCid.values()],
 			})
 			await write(next)
-			return { index: next, bridge: await syncBridge(next) }
+			return {
+				index: next,
+				bridge: await syncBridge(next),
+				complete: !reason,
+				truncated: Boolean(reason),
+				reason,
+				scanned,
+				requests,
+			}
 		})
 	}
 
@@ -239,6 +316,8 @@
 
 	background.DirectoryIndex = {
 		MAX_DIRECTORIES,
+		MAX_REQUESTS,
+		MAX_DURATION_MS,
 		MAX_DEPTH,
 		storageKey,
 		normalizeCid,

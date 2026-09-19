@@ -70,6 +70,7 @@ const I18N_STRINGS = {
 		directory_scan_remove: '移除',
 		directory_scan_children: '扫描子目录',
 		directory_scan_success: '已扫描 {count} 个目录；Bridge 同步状态：{bridge}。',
+		directory_scan_truncated: '扫描已受预算限制，结果可能不完整（{reason}，请求 {requests} 次）。',
 		directory_scan_failed: '目录扫描失败：',
 		directory_bridge_synced: '已同步',
 		directory_bridge_pending: '待同步',
@@ -164,6 +165,7 @@ const I18N_STRINGS = {
 		directory_scan_remove: 'Remove',
 		directory_scan_children: 'Scan children',
 		directory_scan_success: 'Scanned {count} directories; Bridge sync: {bridge}.',
+		directory_scan_truncated: 'The scan reached a safety budget; the result may be incomplete ({reason}, {requests} requests).',
 		directory_scan_failed: 'Directory scan failed: ',
 		directory_bridge_synced: 'synced',
 		directory_bridge_pending: 'pending',
@@ -253,6 +255,17 @@ function directoryBridgeLabel(result) {
 	return bridge.ok === true ? t('directory_bridge_synced') : t('directory_bridge_pending')
 }
 
+function directoryScanLabel(result) {
+	const text = replaceCount(
+		t('directory_scan_success').replace('{bridge}', directoryBridgeLabel(result)),
+		result?.index?.directories?.length || 0,
+	)
+	if (!result?.truncated && result?.complete !== false) return text
+	return `${text} ${t('directory_scan_truncated')
+		.replace('{reason}', String(result?.reason || 'budget'))
+		.replace('{requests}', String(Number(result?.requests) || 0))}`
+}
+
 function selectedDirectoryCids() {
 	return new Set((Push115.PathUtils?.parsePathList(
 		document.getElementById('push115-save-dirs-input')?.value || '',
@@ -328,10 +341,7 @@ async function scanDirectories() {
 		directoryIndex = response.index || directoryIndex
 		renderDirectoryIndex()
 		const status = document.getElementById('push115-directory-status')
-		if (status) status.textContent = replaceCount(
-			t('directory_scan_success').replace('{bridge}', directoryBridgeLabel(response)),
-			directoryIndex.directories?.length || 0,
-		)
+		if (status) status.textContent = directoryScanLabel(response)
 	} catch (error) {
 		const status = document.getElementById('push115-directory-status')
 		if (status) status.textContent = t('directory_scan_failed') + (error?.message || error)
@@ -348,10 +358,7 @@ async function scanDirectoryRoot(item, button) {
 		directoryIndex = response.index || directoryIndex
 		renderDirectoryIndex()
 		const status = document.getElementById('push115-directory-status')
-		if (status) status.textContent = replaceCount(
-			t('directory_scan_success').replace('{bridge}', directoryBridgeLabel(response)),
-			directoryIndex.directories?.length || 0,
-		)
+		if (status) status.textContent = directoryScanLabel(response)
 	} catch (error) {
 		const status = document.getElementById('push115-directory-status')
 		if (status) status.textContent = t('directory_scan_failed') + (error?.message || error)

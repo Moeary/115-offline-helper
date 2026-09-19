@@ -106,6 +106,7 @@ Content-Type: application/json
 可选的 user allowlist 会进一步限制发送者。Bridge 不查询 115 目录，也不接收或保存 115 Cookie。
 Chrome 扩展扫描目录后，会把非敏感的路径、CID 和 revision 通过 `PUT /v1/runtime/directories`
 保存到 SQLite；Telegram 每次 `/dir`、`/add` 或候选确认都会读取最新快照，无需重启 Bridge。
+`/dir` 使用 CID/parentCid 构成的分页目录树，每页最多展示少量子目录按钮，避免把整个 registry 一次性展开成超大的 Telegram keyboard。
 没有快照且没有静态 fallback 时，`/dir` 会提示打开扩展并同步目录。目录选择按
 chat 和 user 记忆；候选按钮点击时使用该用户最新选择的目录。`/add <Magnet|ED2K>`
 直接加入队列，`/jobs` 查看自己的任务列表，进入详情后可重试失败任务或取消活动任务。

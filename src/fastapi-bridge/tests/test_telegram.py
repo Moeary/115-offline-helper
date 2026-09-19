@@ -633,6 +633,199 @@ def test_telegram_reads_dynamic_registry_without_restart_and_keeps_static_fallba
         store.close()
 
 
+def test_telegram_directory_picker_limits_large_registry_to_one_page() -> None:
+    store = QueueStore(":memory:")
+    transport = FakeTransport()
+    service = TelegramService(
+        store,
+        FakeProvider(),
+        transport,
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        clock=lambda: 50,
+    )
+    try:
+        entries = [
+            {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0}
+        ]
+        entries.extend(
+            {
+                "cid": str(index),
+                "parentCid": "0",
+                "name": f"目录{index}",
+                "path": f"/d{index}",
+                "depth": 1,
+            }
+            for index in range(1, 4000)
+        )
+        store.set_directory_registry(_telegram_registry(7, entries))
+
+        result = asyncio.run(service.handle_update({"message": _message("/dir")}))
+        assert result["kind"] == "dir"
+        keyboard = transport.messages[-1][3]["inline_keyboard"]
+        directory_rows = [
+            row for row in keyboard if row and row[0]["text"].startswith("进入 · ")
+        ]
+        assert len(directory_rows) == 8
+        assert len(keyboard) <= 10  # current-directory + 8 entries + navigation
+        assert keyboard[-1][0]["text"] == "下一页"
+        assert all("/d" not in row[0]["callback_data"] for row in keyboard)
+
+        next_data = keyboard[-1][0]["callback_data"]
+        next_payload = store.peek_callback(
+            next_data.removeprefix("av1:"),
+            chat_id=11,
+            user_id=22,
+            message_id=transport.next_id,
+            now=50,
+        )
+        assert next_payload is not None
+        assert set(next_payload) == {"kind", "parentCid", "page", "revision"}
+        assert next_payload["kind"] == "dir_page"
+        assert next_payload["parentCid"] == "0"
+        assert next_payload["page"] == 1
+        assert next_payload["revision"] == 7
+    finally:
+        store.close()
+
+
+def test_telegram_directory_browse_paginates_selects_and_rejects_stale_callbacks() -> None:
+    store = QueueStore(":memory:")
+    transport = FakeTransport()
+    service = TelegramService(
+        store,
+        FakeProvider(),
+        transport,
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        clock=lambda: 50,
+    )
+    try:
+        entries = [
+            {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+            {"cid": "9", "parentCid": "0", "name": "动画", "path": "/动画", "depth": 1},
+            {"cid": "10", "parentCid": "0", "name": "电影", "path": "/电影", "depth": 1},
+            {"cid": "90", "parentCid": "9", "name": "第一季", "path": "/动画/第一季", "depth": 2},
+        ]
+        entries.extend(
+            {
+                "cid": str(index),
+                "parentCid": "0",
+                "name": f"目录{index}",
+                "path": f"/目录{index}",
+                "depth": 1,
+            }
+            for index in range(11, 19)
+        )
+        store.set_directory_registry(_telegram_registry(1, entries))
+
+        first = asyncio.run(service.handle_update({"message": _message("/dir")}))
+        assert first["kind"] == "dir"
+        first_message_id = transport.next_id
+        first_keyboard = transport.messages[-1][3]["inline_keyboard"]
+        stale_animation_data = first_keyboard[1][0]["callback_data"]
+        next_data = first_keyboard[-1][0]["callback_data"]
+        next_page = asyncio.run(
+            service.handle_update(
+                {"callback_query": _callback(next_data, first_message_id, callback_id="next")}
+            )
+        )
+        assert next_page["pageNumber"] == 1
+        second_keyboard = transport.messages[-1][3]["inline_keyboard"]
+        assert second_keyboard[-1][0]["text"] == "上一页"
+
+        previous_data = second_keyboard[-1][0]["callback_data"]
+        previous_page = asyncio.run(
+            service.handle_update(
+                {
+                    "callback_query": _callback(
+                        previous_data, transport.next_id, callback_id="previous"
+                    )
+                }
+            )
+        )
+        assert previous_page["parentCid"] == "0"
+        assert previous_page["pageNumber"] == 0
+
+        browse_movie = asyncio.run(
+            service.handle_update(
+                {"callback_query": _callback(first_keyboard[2][0]["callback_data"], first_message_id, callback_id="browse")}
+            )
+        )
+        assert browse_movie["parentCid"] == "10"
+        movie_keyboard = transport.messages[-1][3]["inline_keyboard"]
+        assert movie_keyboard[-1][0]["text"] == "上一层"
+        up = asyncio.run(
+            service.handle_update(
+                {
+                    "callback_query": _callback(
+                        movie_keyboard[-1][0]["callback_data"],
+                        transport.next_id,
+                        callback_id="up",
+                    )
+                }
+            )
+        )
+        assert up["parentCid"] == "0"
+        assert up["pageNumber"] == 0
+
+        fresh = asyncio.run(service.handle_update({"message": _message("/dir")}))
+        assert fresh["kind"] == "dir"
+        fresh_message_id = transport.next_id
+        fresh_keyboard = transport.messages[-1][3]["inline_keyboard"]
+        browse_animation = asyncio.run(
+            service.handle_update(
+                {
+                    "callback_query": _callback(
+                        fresh_keyboard[1][0]["callback_data"],
+                        fresh_message_id,
+                        callback_id="browse-animation",
+                    )
+                }
+            )
+        )
+        assert browse_animation["parentCid"] == "9"
+        animation_keyboard = transport.messages[-1][3]["inline_keyboard"]
+        selected = asyncio.run(
+            service.handle_update(
+                {
+                    "callback_query": _callback(
+                        animation_keyboard[0][0]["callback_data"],
+                        transport.next_id,
+                        callback_id="select-animation",
+                    )
+                }
+            )
+        )
+        assert selected["savePathCid"] == "9"
+        assert store.get_telegram_preference(11, 22)["lastSavePathCid"] == "9"
+
+        store.set_directory_registry(
+            _telegram_registry(
+                2,
+                [
+                    {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+                    {"cid": "10", "parentCid": "0", "name": "电影", "path": "/电影", "depth": 1},
+                ],
+            )
+        )
+        stale = asyncio.run(
+            service.handle_update(
+                {
+                    "callback_query": _callback(
+                        stale_animation_data,
+                        first_message_id,
+                        callback_id="stale",
+                    )
+                }
+            )
+        )
+        assert stale["error"] == "invalid_callback"
+        assert store.get_telegram_preference(11, 22)["lastSavePathCid"] == "9"
+    finally:
+        store.close()
+
+
 def test_telegram_empty_registry_prompts_sync_and_blocks_add_and_candidate() -> None:
     store = QueueStore(":memory:")
     transport = FakeTransport()

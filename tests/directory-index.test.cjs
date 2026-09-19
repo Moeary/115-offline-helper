@@ -6,10 +6,10 @@ const vm = require('node:vm')
 
 const extension = path.join(__dirname, '../src/chrome-extension')
 
-function environment() {
+function environment(options = {}) {
 	const data = {}
 	const calls = []
-	const listings = {
+	const listings = options.listings || {
 		'0': {
 			path: [{ cid: '0', n: '根目录' }],
 			items: [
@@ -61,13 +61,18 @@ function environment() {
 	vm.runInContext(fs.readFileSync(path.join(extension, 'background/directory-index.js'), 'utf8'), context, {
 		filename: 'background/directory-index.js',
 	})
-	return { api: context.Push115.Background.DirectoryIndex, data, calls }
+	return { api: context.Push115.Background.DirectoryIndex, data, calls, listings }
 }
 
 test('directory scan builds a shallow index from folder listings and syncs it', async () => {
 	const e = environment()
 	const result = await e.api.scan({ roots: ['0'], maxDepth: 1 })
 	assert.equal(e.calls.join(','), '0')
+	assert.equal(result.complete, true)
+	assert.equal(result.truncated, false)
+	assert.equal(result.reason, null)
+	assert.equal(result.scanned, 1)
+	assert.equal(result.requests, 1)
 	assert.equal(result.index.revision, 1)
 	assert.deepEqual(JSON.parse(JSON.stringify(result.index.directories)), [
 		{ cid: '123', parentCid: '0', name: '媒体', path: '/媒体', depth: 1 },
@@ -90,7 +95,51 @@ test('selected roots can be recursively scanned without traversing unrelated fol
 	e.calls.length = 0
 	const shallow = await e.api.scan({ roots: ['123'], maxDepth: 1 })
 	assert.equal(e.calls.join(','), '123')
-	assert.deepEqual(JSON.parse(JSON.stringify(shallow.index.directories.map(item => item.path))), ['/媒体', '/备份', '/媒体/JAV'])
+	assert.deepEqual(JSON.parse(JSON.stringify(shallow.index.directories.map(item => item.path))), ['/媒体', '/备份', '/媒体/JAV', '/媒体/JAV/有码'])
+})
+
+test('shallow root scans retain cached descendants below existing direct children', async () => {
+	const e = environment()
+	await e.api.scan({ roots: ['0'], maxDepth: 3 })
+	e.calls.length = 0
+	const result = await e.api.scan({ roots: ['0'], maxDepth: 1 })
+	assert.deepEqual(e.calls, ['0'])
+	assert.deepEqual(JSON.parse(JSON.stringify(result.index.directories.map(item => item.path))), ['/媒体', '/备份', '/媒体/JAV', '/媒体/JAV/有码'])
+})
+
+test('shallow root scans rewrite cached descendant paths when a direct child is renamed', async () => {
+	const e = environment()
+	await e.api.scan({ roots: ['0'], maxDepth: 3 })
+	e.listings['0'].items[0].n = '影视'
+	const result = await e.api.scan({ roots: ['0'], maxDepth: 1 })
+	assert.deepEqual(JSON.parse(JSON.stringify(result.index.directories.map(item => item.path))), ['/影视', '/备份', '/影视/JAV', '/影视/JAV/有码'])
+	assert.equal(await e.api.resolvePath('/影视/JAV'), '789')
+})
+
+test('scanning a parent removes a disappeared direct child and its cached subtree', async () => {
+	const e = environment()
+	await e.api.scan({ roots: ['0'], maxDepth: 3 })
+	e.listings['0'].items = [{ cid: '456', n: '备份' }]
+	const result = await e.api.scan({ roots: ['0'], maxDepth: 1 })
+	assert.deepEqual(JSON.parse(JSON.stringify(result.index.directories)), [
+		{ cid: '456', parentCid: '0', name: '备份', path: '/备份', depth: 1 },
+	])
+})
+
+test('directory scan stops at the hard directory budget and reports truncation metadata', async () => {
+	const listings = { '0': { path: [{ cid: '0', n: '根目录' }], items: [] } }
+	for (let index = 1; index <= 4000; index += 1) {
+		listings['0'].items.push({ cid: String(index), n: `目录${index}` })
+		listings[String(index)] = { path: [{ cid: '0', n: '根目录' }, { cid: String(index), n: `目录${index}` }], items: [] }
+	}
+	const e = environment({ listings })
+	const result = await e.api.scan({ roots: ['0'], maxDepth: 2 })
+	assert.equal(result.complete, false)
+	assert.equal(result.truncated, true)
+	assert.equal(result.reason, 'directory_limit')
+	assert.equal(result.scanned, 4000)
+	assert.equal(result.requests, 4000)
+	assert.equal(e.calls.length, 4000)
 })
 
 test('index normalization removes unsafe, duplicate, and oversized records', () => {

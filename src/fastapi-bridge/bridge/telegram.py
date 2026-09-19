@@ -49,7 +49,10 @@ _MAX_CANDIDATES = 24
 _MAX_CAPTION = 1024
 _MAX_BUTTON_TEXT = 56
 _MAX_JOBS = 10
-_CALLBACK_KINDS = frozenset({"candidate", "dir", "job_detail", "retry", "cancel"})
+_MAX_DIRECTORY_PAGE_SIZE = 8
+_CALLBACK_KINDS = frozenset(
+    {"candidate", "dir", "dir_page", "job_detail", "retry", "cancel"}
+)
 _TELEGRAM_SAVE_PATH_CID = re.compile(r"(?:0|[1-9][0-9]{0,63})\Z")
 
 
@@ -358,29 +361,42 @@ class TelegramService:
         return value
 
     @staticmethod
-    def _registry_path_options(
+    def _registry_directory_entries(
         registry: Mapping[str, Any],
-    ) -> tuple[tuple[str, str], ...]:
+    ) -> tuple[dict[str, Any], ...]:
+        """Normalize the browser snapshot for local directory browsing.
+
+        The browser already supplies the relationship fields needed here.  A
+        small path/depth fallback keeps older snapshots useful when
+        ``parentCid`` was omitted, but this method never asks 115 for more
+        information and never exposes these records to Telegram directly.
+        """
+
         raw_directories = registry.get("directories")
-        entries: Sequence[object] = ()
+        raw_entries: list[object] = []
         if isinstance(raw_directories, Sequence) and not isinstance(
             raw_directories, (str, bytes, bytearray)
         ):
-            entries = raw_directories
-        # Some early browser snapshots represented roots as full entries and
-        # kept ``directories`` for descendants.  Use those roots only when
-        # they carry a displayable name; string root CIDs remain references.
-        if not entries:
-            raw_roots = registry.get("roots")
-            if isinstance(raw_roots, Sequence) and not isinstance(
-                raw_roots, (str, bytes, bytearray)
-            ):
-                entries = raw_roots
+            raw_entries.extend(raw_directories)
 
-        options: list[tuple[str, str]] = []
+        raw_roots = registry.get("roots")
+        root_cids: set[str] = set()
+        if isinstance(raw_roots, Sequence) and not isinstance(
+            raw_roots, (str, bytes, bytearray)
+        ):
+            for item in raw_roots:
+                if isinstance(item, Mapping):
+                    raw_entries.append(item)
+                    raw_cid = str(_field(item, "cid", "") or "").strip()
+                else:
+                    raw_cid = str(item or "").strip()
+                if _TELEGRAM_SAVE_PATH_CID.fullmatch(raw_cid):
+                    root_cids.add(raw_cid)
+
+        entries: list[dict[str, Any]] = []
         seen_cids: set[str] = set()
         seen_paths: set[str] = set()
-        for item in entries:
+        for item in raw_entries:
             cid = str(_field(item, "cid", "") or "").strip()
             name = _clip(_field(item, "name", ""), 128)
             path = str(_field(item, "path", "") or "").strip()
@@ -388,14 +404,147 @@ class TelegramService:
                 continue
             if cid in seen_cids or (path and path in seen_paths):
                 continue
+            raw_parent = _field(item, "parentCid", _field(item, "parent_cid", None))
+            parent_cid: str | None = None
+            if raw_parent is not None and str(raw_parent).strip():
+                parent_cid = str(raw_parent).strip()
+                if (
+                    not _TELEGRAM_SAVE_PATH_CID.fullmatch(parent_cid)
+                    or parent_cid == cid
+                ):
+                    continue
+            raw_depth = _field(item, "depth", None)
+            depth = _int(raw_depth)
+            if depth is not None and not 0 <= depth <= 32:
+                continue
             seen_cids.add(cid)
             if path:
                 seen_paths.add(path)
-            label = "根目录" if cid == "0" else _clip(path or name, 128)
+            entries.append(
+                {
+                    "cid": cid,
+                    "parentCid": parent_cid,
+                    "name": name,
+                    "path": path,
+                    "depth": depth,
+                    "label": "根目录" if cid == "0" else _clip(path or name, 128),
+                }
+            )
+
+        if not entries:
+            return ()
+
+        by_path = {
+            entry["path"]: entry
+            for entry in entries
+            if entry.get("path")
+        }
+        for entry in entries:
+            if entry["cid"] == "0" or entry["parentCid"] is not None:
+                continue
+            if entry["cid"] in root_cids:
+                entry["parentCid"] = "0"
+                continue
+            depth = entry.get("depth")
+            if isinstance(depth, int) and depth <= 1:
+                entry["parentCid"] = "0"
+                continue
+            path = str(entry.get("path") or "")
+            if path and path != "/":
+                parent_path = path.rsplit("/", 1)[0] or "/"
+                parent = by_path.get(parent_path)
+                if parent is not None and parent["cid"] != entry["cid"]:
+                    entry["parentCid"] = parent["cid"]
+                    continue
+            if path.count("/") <= 1:
+                entry["parentCid"] = "0"
+
+        if "0" not in seen_cids:
+            entries.insert(
+                0,
+                {
+                    "cid": "0",
+                    "parentCid": None,
+                    "name": "根目录",
+                    "path": "/",
+                    "depth": 0,
+                    "label": "根目录",
+                },
+            )
+        return tuple(entries)
+
+    @classmethod
+    def _registry_path_options(
+        cls,
+        registry: Mapping[str, Any],
+    ) -> tuple[tuple[str, str], ...]:
+        entries = cls._registry_directory_entries(registry)
+        options: list[tuple[str, str]] = []
+        seen_cids: set[str] = set()
+        seen_paths: set[str] = set()
+        for entry in entries:
+            cid = str(entry.get("cid") or "").strip()
+            path = str(entry.get("path") or "").strip()
+            label = _clip(entry.get("label") or entry.get("name"), 128)
+            if not _TELEGRAM_SAVE_PATH_CID.fullmatch(cid) or not label:
+                continue
+            if cid in seen_cids or (path and path in seen_paths):
+                continue
+            seen_cids.add(cid)
+            if path:
+                seen_paths.add(path)
             options.append((cid, label))
-        if options and "0" not in seen_cids:
-            options.insert(0, ("0", "根目录"))
+        root_index = next(
+            (index for index, (cid, _label) in enumerate(options) if cid == "0"),
+            None,
+        )
+        if root_index not in (None, 0):
+            options.insert(0, options.pop(root_index))
         return tuple(options)
+
+    @staticmethod
+    def _registry_revision(registry: Mapping[str, Any]) -> int | None:
+        value = registry.get("revision")
+        if not isinstance(value, int) or isinstance(value, bool):
+            return None
+        return value if 0 <= value <= 2**63 - 1 else None
+
+    @classmethod
+    def _registry_directory_page(
+        cls,
+        registry: Mapping[str, Any],
+        parent_cid: object,
+        page: object,
+    ) -> dict[str, Any] | None:
+        if (
+            not isinstance(parent_cid, str)
+            or not _TELEGRAM_SAVE_PATH_CID.fullmatch(parent_cid)
+            or not isinstance(page, int)
+            or isinstance(page, bool)
+            or page < 0
+        ):
+            return None
+        entries = cls._registry_directory_entries(registry)
+        by_cid = {entry["cid"]: entry for entry in entries}
+        parent = by_cid.get(parent_cid)
+        if parent is None:
+            return None
+        children = tuple(
+            entry for entry in entries if entry.get("parentCid") == parent_cid
+        )
+        page_count = max(
+            1, (len(children) + _MAX_DIRECTORY_PAGE_SIZE - 1) // _MAX_DIRECTORY_PAGE_SIZE
+        )
+        if page >= page_count:
+            return None
+        start = page * _MAX_DIRECTORY_PAGE_SIZE
+        return {
+            "parent": parent,
+            "children": children[start : start + _MAX_DIRECTORY_PAGE_SIZE],
+            "childCount": len(children),
+            "page": page,
+            "pageCount": page_count,
+        }
 
     def _path_options(self) -> tuple[tuple[str, str], ...]:
         registry = self._latest_directory_registry()
@@ -451,27 +600,174 @@ class TelegramService:
         source = "上次选择" if remembered else "默认目录"
         return _clip(f"保存目录\n当前：{current}（{source}）\n请选择目录：", 4096)
 
+    def _directory_page_text(
+        self,
+        chat_id: int,
+        user_id: int,
+        page_info: Mapping[str, Any],
+    ) -> str:
+        selected, remembered = self._preferred_save_path(chat_id, user_id)
+        current = self._path_label(selected)
+        source = "上次选择" if remembered else "默认目录"
+        parent = _as_mapping(page_info.get("parent"))
+        parent_label = _clip(parent.get("label") or parent.get("name"), 128)
+        page = int(page_info.get("page", 0)) + 1
+        page_count = int(page_info.get("pageCount", 1))
+        child_count = int(page_info.get("childCount", 0))
+        return _clip(
+            "保存目录\n"
+            f"当前：{current}（{source}）\n"
+            f"浏览：{parent_label or '目录'}（第 {page}/{page_count} 页，共 {child_count} 个子目录）\n"
+            "点击目录进入下一级，或使用当前目录：",
+            4096,
+        )
+
     def _directory_keyboard(
         self,
         chat_id: int,
         user_id: int,
+        *,
+        parent_cid: str = "0",
+        page: int = 0,
     ) -> tuple[list[list[dict[str, str]]], list[tuple[str, dict[str, Any]]]]:
-        options = self._path_options()
-        selected, remembered = self._preferred_save_path(chat_id, user_id)
+        registry = self._latest_directory_registry()
+        if registry is None:
+            # Keep the pre-registry static PUSH115_TELEGRAM_SAVE_PATHS picker
+            # unchanged.  It is intentionally only used when no browser
+            # registry API is available.
+            options = self._path_options()
+            selected, remembered = self._preferred_save_path(chat_id, user_id)
+            rows: list[list[dict[str, str]]] = []
+            specs: list[tuple[str, dict[str, Any]]] = []
+            for cid, name in options:
+                token = self._new_callback_token()
+                if cid == selected:
+                    prefix = "✓ 当前"
+                elif not remembered and cid == options[0][0]:
+                    prefix = "默认"
+                else:
+                    prefix = "目录"
+                rows.append(
+                    [{"text": _clip(f"{prefix} · {name}", _MAX_BUTTON_TEXT), "callback_data": f"{CALLBACK_PREFIX}{token}"}]
+                )
+                specs.append((token, {"kind": "dir", "cid": cid}))
+            return rows, specs
+
+        page_info = self._registry_directory_page(registry, parent_cid, page)
+        revision = self._registry_revision(registry)
+        if page_info is None or revision is None:
+            return [], []
+
+        selected, _remembered = self._preferred_save_path(chat_id, user_id)
         rows: list[list[dict[str, str]]] = []
         specs: list[tuple[str, dict[str, Any]]] = []
-        for cid, name in options:
-            token = self._new_callback_token()
-            if cid == selected:
-                prefix = "✓ 当前"
-            elif not remembered and cid == options[0][0]:
-                prefix = "默认"
-            else:
-                prefix = "目录"
-            rows.append(
-                [{"text": _clip(f"{prefix} · {name}", _MAX_BUTTON_TEXT), "callback_data": f"{CALLBACK_PREFIX}{token}"}]
+
+        token = self._new_callback_token()
+        current_prefix = "✓ " if selected == parent_cid else ""
+        rows.append(
+            [
+                {
+                    "text": _clip(
+                        f"{current_prefix}使用当前目录 · {self._path_label(parent_cid)}",
+                        _MAX_BUTTON_TEXT,
+                    ),
+                    "callback_data": f"{CALLBACK_PREFIX}{token}",
+                }
+            ]
+        )
+        specs.append(
+            (
+                token,
+                {"kind": "dir", "cid": parent_cid, "revision": revision},
             )
-            specs.append((token, {"kind": "dir", "cid": cid}))
+        )
+
+        for entry in page_info["children"]:
+            cid = str(entry["cid"])
+            token = self._new_callback_token()
+            rows.append(
+                [
+                    {
+                        "text": _clip(f"进入 · {entry['label']}", _MAX_BUTTON_TEXT),
+                        "callback_data": f"{CALLBACK_PREFIX}{token}",
+                    }
+                ]
+            )
+            specs.append(
+                (
+                    token,
+                    {
+                        "kind": "dir_page",
+                        "parentCid": cid,
+                        "page": 0,
+                        "revision": revision,
+                    },
+                )
+            )
+
+        navigation: list[dict[str, str]] = []
+
+        if parent_cid != "0":
+            raw_ancestor = page_info["parent"].get("parentCid")
+            ancestor = (
+                raw_ancestor
+                if isinstance(raw_ancestor, str)
+                and _TELEGRAM_SAVE_PATH_CID.fullmatch(raw_ancestor)
+                and raw_ancestor != parent_cid
+                else "0"
+            )
+            token = self._new_callback_token()
+            navigation.append(
+                {"text": "上一层", "callback_data": f"{CALLBACK_PREFIX}{token}"}
+            )
+            specs.append(
+                (
+                    token,
+                    {
+                        "kind": "dir_page",
+                        "parentCid": ancestor,
+                        "page": 0,
+                        "revision": revision,
+                    },
+                )
+            )
+
+        if page > 0:
+            token = self._new_callback_token()
+            navigation.append(
+                {"text": "上一页", "callback_data": f"{CALLBACK_PREFIX}{token}"}
+            )
+            specs.append(
+                (
+                    token,
+                    {
+                        "kind": "dir_page",
+                        "parentCid": parent_cid,
+                        "page": page - 1,
+                        "revision": revision,
+                    },
+                )
+            )
+
+        if page + 1 < page_info["pageCount"]:
+            token = self._new_callback_token()
+            navigation.append(
+                {"text": "下一页", "callback_data": f"{CALLBACK_PREFIX}{token}"}
+            )
+            specs.append(
+                (
+                    token,
+                    {
+                        "kind": "dir_page",
+                        "parentCid": parent_cid,
+                        "page": page + 1,
+                        "revision": revision,
+                    },
+                )
+            )
+
+        if navigation:
+            rows.append(navigation)
         return rows, specs
 
     @staticmethod
@@ -701,9 +997,26 @@ class TelegramService:
         user_id: int,
         *,
         prefix: str = "",
+        parent_cid: str = "0",
+        page: int = 0,
     ) -> Mapping[str, Any]:
-        rows, specs = self._directory_keyboard(chat_id, user_id)
-        text = _clip(f"{prefix}\n{self._directory_text(chat_id, user_id)}".strip(), 4096)
+        registry = self._latest_directory_registry()
+        rows, specs = self._directory_keyboard(
+            chat_id,
+            user_id,
+            parent_cid=parent_cid,
+            page=page,
+        )
+        if registry is not None:
+            page_info = self._registry_directory_page(registry, parent_cid, page)
+        else:
+            page_info = None
+        body = (
+            self._directory_page_text(chat_id, user_id, page_info)
+            if page_info is not None and registry is not None
+            else self._directory_text(chat_id, user_id)
+        )
+        text = _clip(f"{prefix}\n{body}".strip(), 4096)
         result = await self.transport.send_message(
             chat_id,
             text,
@@ -1153,11 +1466,37 @@ class TelegramService:
             }
 
         if kind == "dir":
-            if payload_keys != {"kind", "cid"}:
+            registry = self._latest_directory_registry()
+            expected_keys = (
+                {"kind", "cid", "revision"}
+                if registry is not None
+                else {"kind", "cid"}
+            )
+            if payload_keys != expected_keys:
                 await self._answer(callback_id, text="按钮已失效")
                 return {"handled": True, "error": "invalid_callback"}
-            cid = str(payload.get("cid") or "").strip()
-            if cid not in dict(self._path_options()):
+            raw_cid = payload.get("cid")
+            if not isinstance(raw_cid, str) or not _TELEGRAM_SAVE_PATH_CID.fullmatch(
+                raw_cid
+            ):
+                await self._answer(callback_id, text="按钮已失效")
+                return {"handled": True, "error": "invalid_callback"}
+            cid = raw_cid
+            if registry is not None:
+                revision = self._registry_revision(registry)
+                payload_revision = payload.get("revision")
+                if (
+                    revision is None
+                    or not isinstance(payload_revision, int)
+                    or isinstance(payload_revision, bool)
+                    or payload_revision != revision
+                ):
+                    await self._answer(callback_id, text="目录已更新，请重新打开 /dir")
+                    return {"handled": True, "error": "invalid_callback"}
+                path_options = dict(self._registry_path_options(registry))
+            else:
+                path_options = dict(self._path_options())
+            if cid not in path_options:
                 await self._answer(callback_id, text="保存目录已不可用")
                 return {"handled": True, "error": "invalid_save_path"}
             setter = getattr(self.store, "set_telegram_preference", None)
@@ -1201,6 +1540,71 @@ class TelegramService:
             except Exception:
                 pass
             return {"handled": True, "kind": "dir", "savePathCid": cid}
+
+        if kind == "dir_page":
+            if payload_keys != {"kind", "parentCid", "page", "revision"}:
+                await self._answer(callback_id, text="按钮已失效")
+                return {"handled": True, "error": "invalid_callback"}
+            registry = self._latest_directory_registry()
+            raw_parent_cid = payload.get("parentCid")
+            raw_page = payload.get("page")
+            raw_revision = payload.get("revision")
+            revision = self._registry_revision(registry) if registry is not None else None
+            if (
+                registry is None
+                or revision is None
+                or not isinstance(raw_parent_cid, str)
+                or not _TELEGRAM_SAVE_PATH_CID.fullmatch(raw_parent_cid)
+                or not isinstance(raw_page, int)
+                or isinstance(raw_page, bool)
+                or raw_page < 0
+                or not isinstance(raw_revision, int)
+                or isinstance(raw_revision, bool)
+                or raw_revision != revision
+            ):
+                await self._answer(callback_id, text="目录已更新，请重新打开 /dir")
+                return {"handled": True, "error": "invalid_callback"}
+            page_info = self._registry_directory_page(
+                registry,
+                raw_parent_cid,
+                raw_page,
+            )
+            if page_info is None:
+                await self._answer(callback_id, text="目录浏览按钮已失效")
+                return {"handled": True, "error": "invalid_callback"}
+            try:
+                consumed = self.store.consume_callback(
+                    token,
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    now=now,
+                )
+            except Exception:
+                await self._answer(callback_id, text="队列暂时不可用，请稍后重试")
+                return {"handled": True, "error": "queue_unavailable"}
+            if consumed is None:
+                await self._answer(callback_id, text="按钮已过期或已使用")
+                return {"handled": True, "error": "callback_expired"}
+            try:
+                result = await self._send_directory_picker(
+                    chat_id,
+                    user_id,
+                    parent_cid=raw_parent_cid,
+                    page=raw_page,
+                )
+            except Exception:
+                await self._answer(callback_id, text="目录浏览暂时不可用")
+                return {"handled": True, "error": "directory_unavailable"}
+            await self._answer(callback_id, text="已加载目录")
+            return {
+                "handled": True,
+                "kind": "dir",
+                "page": True,
+                "parentCid": raw_parent_cid,
+                "pageNumber": raw_page,
+                "messageId": _message_id(result),
+            }
 
         if kind == "job_detail":
             has_cursor = "cursor" in payload

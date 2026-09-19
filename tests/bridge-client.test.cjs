@@ -189,6 +189,56 @@ test('directory registry sync uses the authenticated loopback PUT contract', asy
 	}])
 })
 
+test('directory registry sync reconciles a stale local revision with the bridge', async () => {
+	let putCount = 0
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+		fetchHandler: async (_url, request) => {
+			if (request.method === 'PUT' && putCount++ === 0) {
+				return response({ detail: { code: 'directory_registry_stale', revision: 27 } }, 409)
+			}
+			if (request.method === 'GET') return response({ schema: 1, registry: { revision: 27 }, revision: 27 })
+			return response({ schema: 1, revision: 28, updated: true })
+		},
+	})
+	const writes = []
+	e.context.Push115.Background.DirectoryIndex = {
+		normalizeIndex: value => value,
+		write: async value => { writes.push(value) },
+	}
+	const result = await e.client.syncDirectoryRegistry({
+		schema: 1,
+		revision: 1,
+		scannedAt: 123,
+		roots: ['0'],
+		directories: [{ cid: '42', parentCid: '0', name: '影视', path: '/影视', depth: 1 }],
+	})
+	assert.equal(result.reconciled, true)
+	assert.equal(result.revision, 28)
+	assert.deepEqual(e.calls.map(([, request]) => request.method), ['PUT', 'GET', 'PUT'])
+	assert.equal(JSON.parse(e.calls[2][1].body).revision, 28)
+	assert.equal(writes.length, 1)
+	assert.equal(writes[0].revision, 28)
+})
+
+test('directory registry sync rejects an oversized UTF-8 payload before fetch', async () => {
+	const e = environment({
+		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+	})
+	const directories = Array.from({ length: 4000 }, (_item, index) => ({
+		cid: String(index + 1),
+		parentCid: '0',
+		name: `目录-${index}-${'长'.repeat(256)}`,
+		path: `/目录-${index}-${'长'.repeat(256)}`,
+		depth: 1,
+	}))
+	await assert.rejects(
+		e.client.syncDirectoryRegistry({ schema: 1, revision: 1, scannedAt: 123, roots: ['0'], directories }),
+		error => error?.code === 'BRIDGE_DIRECTORY_PAYLOAD_TOO_LARGE',
+	)
+	assert.equal(e.calls.length, 0)
+})
+
 test('bridge response body remains covered by the abort timeout', async () => {
 	let aborted = false
 	const e = environment({

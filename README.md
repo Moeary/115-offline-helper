@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.10.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.10.1-orange" alt="Version">
 </p>
 
 ---
@@ -131,7 +131,7 @@ pixi run deploy
 ## 第一次使用
 
 1. 点击扩展图标，使用 115 手机客户端扫码登录。
-2. 在设置页点击“扫描目录”建立 115 Directory Registry；默认只扫描根目录一级，选中管理根目录后可继续递归扫描。站点档案和确认窗口从索引选择目录；旧版的 `目录名:CID` 文本仍可作为高级 fallback，不需要为每个站点重复填写 CID。
+2. 在设置页点击“扫描目录”建立 115 Directory Registry；默认只扫描根目录一级，选中管理根目录后可继续递归扫描。扫描有目录数、请求数和时长安全预算，达到预算时页面会明确标记结果可能不完整，可继续按子目录扫描。站点档案和确认窗口从索引选择目录；旧版的 `目录名:CID` 文本仍可作为高级 fallback，不需要为每个站点重复填写 CID。
 3. 在“站点增强”中分别启用 Generic、JavBus、Nyaa、Sukebei、Mikan、South Plus，设置各自默认目录、默认规则、内联按钮和列表并发数。默认并发为 2，安全上限也是 2；115 文件读写共用 500ms 串行节流（不超过约 2 QPS），后台任务监控每轮最多轮询 2 项并按游标轮转。
 4. 回到网页点击按钮或打开弹窗手工粘贴链接。确认窗口里的规则和目录可以覆盖网站默认值。若 South Plus 尚未授予持久网页权限，打开扩展弹窗会临时增强当前网页；要让新页面自动出现按钮，请在设置页保存并允许 South Plus 权限。重新加载扩展后，已打开且已获授权的 South Plus 线程也会自动补注入；若页面仍停留在旧文档，可手动刷新一次。
 5. 在主页的后台任务页查看处理日志、刷新状态或重试失败项；South Plus 的“记录”按钮只保存本地链接、来源、文件名和番号，不会创建 115 云端任务。设置页提供“清空日志”，只清除历史记录，不取消进行中的任务，也不清除番组绑定和去重回执。若本地任务状态因目录失效而卡住，可使用“完全重置任务”：它会清除扩展本地任务、处理计划、番组绑定和去重回执，但不会取消 115 云端任务，也不会修改登录、目录或站点设置；Bridge 已领取任务、租约回执和事件 outbox 会保留，避免重置后重复提交。
@@ -140,7 +140,7 @@ pixi run deploy
 
 扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。Bridge 默认关闭；在设置页启用时，浏览器只请求 `http://127.0.0.1/*` 可选权限，传输地址和端口仍固定，Bearer token 只保存在本地设置并由 service worker 使用，不会注入网页或转发 Cookie。Bridge 的 Intent 只接受严格的 BTIH Magnet 或 ED2K file 链接。
 
-设置页可填写 token 和 Bridge 默认 CID；该 CID 只在领取的任务没有指定 `savePathCid` 时使用，任务自带的 CID 会被保留。目录扫描结果会以非敏感的 `schema/revision/path/CID` 快照自动同步到 Bridge SQLite，Telegram `/dir` 动态读取最新快照；Bridge 尚未收到浏览器快照时会提示先同步目录，旧版 `PUSH115_TELEGRAM_SAVE_PATHS` 仍可作为兼容 fallback。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile`（`/av` 为 `jav`、`/anime` 为 `anime`）和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Telegram 支持 `/dir` 选择动态目录、`/add <Magnet|ED2K>` 直接入队和 `/jobs` 查看任务；详情页可对失败任务重试、对进行中任务取消。取消进行中任务只停止扩展本地任务和监控，不取消 115 云端离线任务；排队中的任务可以直接终止。Bridge 的 `/av` 查询 JavBus，现有 `/anime 关键词` 保持 Nyaa RSS 搜索，本版本没有新增 RSS、订阅或自动搜索能力。Windows 启动、token、Telegram allowlist、目录 registry fallback、Nyaa 来源和 CORS 配置见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
+设置页可填写 token 和 Bridge 默认 CID；该 CID 只在领取的任务没有指定 `savePathCid` 时使用，任务自带的 CID 会被保留。目录扫描结果会以非敏感的 `schema/revision/path/CID` 快照自动同步到 Bridge SQLite，Telegram `/dir` 动态读取最新快照并按目录树分页浏览，避免把几千个目录一次性生成成按钮；Bridge 尚未收到浏览器快照时会提示先同步目录，旧版 `PUSH115_TELEGRAM_SAVE_PATHS` 仍可作为兼容 fallback。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile`（`/av` 为 `jav`、`/anime` 为 `anime`）和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Telegram 支持 `/dir` 选择动态目录、`/add <Magnet|ED2K>` 直接入队和 `/jobs` 查看任务；详情页可对失败任务重试、对进行中任务取消。取消进行中任务只停止扩展本地任务和监控，不取消 115 云端离线任务；排队中的任务可以直接终止。Bridge 的 `/av` 查询 JavBus，现有 `/anime 关键词` 保持 Nyaa RSS 搜索，本版本没有新增 RSS、订阅或自动搜索能力。Windows 启动、token、Telegram allowlist、目录 registry fallback、Nyaa 来源和 CORS 配置见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
 
 在仓库根目录使用 Pixi 启动 Bridge：
 

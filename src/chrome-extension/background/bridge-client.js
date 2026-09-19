@@ -17,6 +17,7 @@
 	const REQUEST_TIMEOUT_MS = 15000
 	const MAX_OUTBOX = 200
 	const MAX_JOBS = 500
+	const MAX_DIRECTORY_PAYLOAD_BYTES = 1024 * 1024
 	const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'uncertain', 'cancelled'])
 	const TERMINAL_ACTION_STATES = new Set(['applied', 'failed', 'uncertain', 'noop'])
 	const ACTION_TYPES = new Set(['cancel_task'])
@@ -288,6 +289,7 @@
 					uncertain: Number(response.status) >= 500 || Number(response.status) === 408,
 				})
 				error.responseBody = scrubWithToken(typeof body === 'string' ? body : '', token)
+				if (body && typeof body === 'object') error.responsePayload = body
 				return Promise.reject(error)
 			}
 			// Event handlers may legitimately answer 204; callers that require a
@@ -296,6 +298,58 @@
 			if (typeof body === 'object') return body
 			return Promise.reject(bridgeError('bridge 返回格式无效', 'BRIDGE_INVALID_RESPONSE', { uncertain: true }))
 		})
+	}
+
+	function utf8ByteLength(value) {
+		let bytes = 0
+		for (const character of String(value)) {
+			const codePoint = character.codePointAt(0)
+			bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4
+		}
+		return bytes
+	}
+
+	function directoryRevision(value) {
+		const direct = Number(value?.revision)
+		const nested = Number(value?.registry?.revision)
+		const revision = Number.isSafeInteger(direct) && direct >= 0
+			? direct
+			: nested
+		return Number.isSafeInteger(revision) && revision >= 0 ? revision : null
+	}
+
+	function directoryPayload(index) {
+		const normalized = typeof background.DirectoryIndex?.normalizeIndex === 'function'
+			? background.DirectoryIndex.normalizeIndex(index)
+			: index
+		const payload = {
+			schema: 1,
+			revision: Number(normalized?.revision) || 0,
+			scannedAt: Number(normalized?.scannedAt) || 0,
+			roots: Array.isArray(normalized?.roots) ? normalized.roots : ['0'],
+			directories: Array.isArray(normalized?.directories) ? normalized.directories : [],
+		}
+		const encoded = JSON.stringify(payload)
+		const bytes = utf8ByteLength(encoded)
+		if (bytes > MAX_DIRECTORY_PAYLOAD_BYTES) {
+			throw bridgeError(
+				`目录 registry 请求体过大（${bytes} bytes，限制 ${MAX_DIRECTORY_PAYLOAD_BYTES} bytes）`,
+				'BRIDGE_DIRECTORY_PAYLOAD_TOO_LARGE',
+			)
+		}
+		return { payload, bytes, normalized }
+	}
+
+	async function persistDirectoryRevision(index, revision) {
+		if (!Number.isSafeInteger(revision) || revision < 0) return
+		if (Number(index?.revision) === revision) return
+		const writer = background.DirectoryIndex?.write
+		if (typeof writer !== 'function') return
+		try {
+			await writer({ ...index, revision })
+		} catch (error) {
+			console.warn('[BridgeClient] directory registry revision persistence failed:', error?.message || error)
+		}
 	}
 
 	function bridgeUrl(path) {
@@ -1422,18 +1476,39 @@
 		const config = bridgeConfig || await readConfig()
 		if (!config.enabled || !config.token) return { disabled: true }
 		if (!await hasPermission()) return { permission: false }
-		const normalized = typeof background.DirectoryIndex?.normalizeIndex === 'function'
-			? background.DirectoryIndex.normalizeIndex(index)
-			: index
-		const result = await requestJson('/v1/runtime/directories', {
-			schema: 1,
-			revision: Number(normalized?.revision) || 0,
-			scannedAt: Number(normalized?.scannedAt) || 0,
-			roots: Array.isArray(normalized?.roots) ? normalized.roots : ['0'],
-			directories: Array.isArray(normalized?.directories) ? normalized.directories : [],
-		}, config.token, 'PUT')
+		const { payload, bytes, normalized } = directoryPayload(index)
+		let result
+		let reconciled = false
+		try {
+			result = await requestJson('/v1/runtime/directories', payload, config.token, 'PUT')
+		} catch (error) {
+			if (error?.code !== 'HTTP_409') throw error
+			// The extension's local storage can be reset independently from the
+			// bridge database (for example after reinstalling the extension).  A
+			// stale/conflicting local revision must recover instead of requiring
+			// the counter to catch up one scan at a time.
+			const remote = await requestJson('/v1/runtime/directories', undefined, config.token, 'GET')
+			const remoteRevision = directoryRevision(remote)
+			if (remoteRevision === null || remoteRevision >= Number.MAX_SAFE_INTEGER) {
+				throw bridgeError('bridge directory registry revision 无法自愈', 'BRIDGE_DIRECTORY_REVISION_UNSAFE', { uncertain: true })
+			}
+			const retryPayload = { ...payload, revision: remoteRevision + 1 }
+			const retryBytes = utf8ByteLength(JSON.stringify(retryPayload))
+			if (retryBytes > MAX_DIRECTORY_PAYLOAD_BYTES) {
+				throw bridgeError(
+					`目录 registry 请求体过大（${retryBytes} bytes，限制 ${MAX_DIRECTORY_PAYLOAD_BYTES} bytes）`,
+					'BRIDGE_DIRECTORY_PAYLOAD_TOO_LARGE',
+				)
+			}
+			result = await requestJson('/v1/runtime/directories', retryPayload, config.token, 'PUT')
+			reconciled = true
+		}
 		if (!result || result.schema !== 1) throw bridgeError('目录 registry 响应格式无效', 'BRIDGE_INVALID_DIRECTORY_REGISTRY', { uncertain: true })
-		return result
+		const serverRevision = directoryRevision(result)
+		if (serverRevision !== null && serverRevision > Number(normalized?.revision || 0)) {
+			await persistDirectoryRevision(normalized, serverRevision)
+		}
+		return { ...result, bytes, reconciled }
 	}
 
 	async function processPending() {
@@ -1519,6 +1594,7 @@
 		LEASE_SECONDS,
 		REQUEST_TIMEOUT_MS,
 		MAX_OUTBOX,
+		MAX_DIRECTORY_PAYLOAD_BYTES,
 		readConfig,
 		readJobs,
 		readOutbox,
