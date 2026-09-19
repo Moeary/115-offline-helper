@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-<img src="https://img.shields.io/badge/version-1.10.1-orange" alt="Version">
+<img src="https://img.shields.io/badge/version-1.11.0-orange" alt="Version">
 </p>
 
 ---
@@ -118,18 +118,18 @@ Download the latest archive from [Releases](https://github.com/gangz1o/115-offli
 
 ### Local automation Bridge
 
-The extension can optionally connect to a local FastAPI service at `http://127.0.0.1:52115`, claim Telegram `/av` and JavBus candidates, and submit them through the existing background `Router.submitIntent` path. Bridge is off by default. Enabling it requests only the optional `http://127.0.0.1/*` permission; the transport origin and port remain fixed. The Bearer token stays in local extension storage, is used only by the service worker, and is never injected into pages or sent as a cookie. Bridge Intents accept strict BTIH Magnet or ED2K file links.
+The extension can optionally connect to a local FastAPI service at `http://127.0.0.1:52115`, claim Telegram `/av` and JavBus candidates, and submit them through the existing background `Router.submitIntent` path. Version 1.11.0 adds zero-config onboarding: start Bridge, enter the one-time code printed in the terminal, and the extension stores the Bearer token locally. Normal users no longer need to find the extension ID, copy a token, enter chat/user IDs, or edit `.env`. Enabling it requests only the fixed loopback permission; the token is used only by the service worker and is never injected into pages or sent as a cookie. Bridge Intents accept strict BTIH Magnet or ED2K file links.
 
-The Settings page accepts the token and a Bridge default CID. That CID is used only when a claimed job has no `savePathCid`; an explicit job CID is preserved. Directory scans are uploaded as a non-sensitive `schema/revision/path/CID` snapshot to Bridge SQLite, and Telegram `/dir` reads the latest snapshot dynamically through a paginated directory tree so thousands of entries do not become one oversized keyboard. Before the browser has synced a snapshot, the Bridge asks the user to sync directories; the legacy `PUSH115_TELEGRAM_SAVE_PATHS` setting remains an optional compatibility fallback. The worker claims one job every 30 seconds, persists its `jobId`, lease and submission state before submitting an intent with an explicit `processorProfile` (`jav` for `/av`, `anime` for `/anime`) and `metadata.monitorDownload: true`, then reports progress and terminal states with stable event IDs. If a network failure, worker restart or local persistence error leaves the submission result unclear, the job becomes `uncertain` and is never submitted again automatically. A local `recorded` history entry is never reported as completed. Telegram supports `/dir` for the dynamic directory picker, `/add <Magnet|ED2K>` for direct enqueueing and `/jobs` for the user's task list; task details offer retry for failed jobs and cancel for active jobs. Cancelling an active job stops the local extension task and monitoring only; it does not cancel the 115 cloud offline task. A queued job can be terminated directly. Bridge Telegram `/av` searches JavBus, while the existing `/anime keyword` Nyaa RSS search remains available; this release adds no RSS, subscription or automatic-search feature. Windows startup, token, Telegram allowlist, directory registry fallback, Nyaa source and CORS configuration are described in [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md).
+The Settings page accepts the Telegram Bot Token and keeps the old manual token/CID controls under Advanced settings. Bridge validates the token with `getMe`, starts polling dynamically, and shows a Telegram `/start` owner-claim link. After claiming, only that owner can use `/av`, `/anime`, `/add`, `/jobs`, and `/dir`; changing the Bot Token requires a new claim. Directory scans are uploaded as a non-sensitive `schema/revision/path/CID` snapshot to Bridge SQLite, and Telegram `/dir` reads the latest snapshot dynamically through a paginated directory tree. Before the browser has synced a snapshot, the Bridge asks the user to sync directories; the legacy `PUSH115_TELEGRAM_SAVE_PATHS` setting remains an optional compatibility fallback. The worker claims one job every 30 seconds, persists its `jobId`, lease and submission state before submitting an intent with an explicit `processorProfile` (`jav` for `/av`, `anime` for `/anime`) and `metadata.monitorDownload: true`, then reports progress and terminal states with stable event IDs. If a network failure, worker restart or local persistence error leaves the submission result unclear, the job becomes `uncertain` and is never submitted again automatically. A local `recorded` history entry is never reported as completed. Telegram supports `/dir`, `/add <Magnet|ED2K>`, and `/jobs`; task details offer retry for failed jobs and cancel for active jobs. Cancelling an active job stops the extension's local task and monitoring only; it does not cancel the 115 cloud offline task. Bridge Telegram `/av` searches JavBus, while `/anime keyword` remains available through Nyaa RSS. Advanced environment variables are described in [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md).
 
 Start the Bridge from the repository root with Pixi:
 
 ```powershell
 pixi install
-Copy-Item src\fastapi-bridge\.env.example src\fastapi-bridge\.env
-pixi run bridge-token
 pixi run bridge-start
 ```
+
+On first start the terminal prints a pairing code valid for five minutes. Open the extension settings, check Bridge, and enter the code. After reinstalling the browser extension, run `pixi run bridge-pair` to open a new pairing window. Advanced users can still use `.env.example` for provider, database, and timeout overrides.
 
 State, the database and the token are stored under `src/fastapi-bridge/.state` by default; run tests with `pixi run bridge-test`.
 
@@ -150,7 +150,7 @@ See [`src/README.md`](src/README.md), [`src/chrome-extension/README.md`](src/chr
 ## Privacy and license
 
 - Data is kept locally in `chrome.storage.local`.
-- No telemetry, advertising or profiling is performed, and 115 cookies are never uploaded to the Bridge or Telegram. If Telegram is enabled, selected resources and task status are sent to the configured allowlisted chats.
+- No telemetry, advertising or profiling is performed, and 115 cookies are never uploaded to the Bridge or Telegram. If Telegram is enabled, selected resources and task status are sent only to the claimed Telegram owner.
 - By default the extension contacts only `*.115.com`; when Local Bridge is enabled it also contacts the fixed `127.0.0.1:52115` loopback service.
 - [Privacy policy](https://gangz1o.github.io/115-offline-helper/privacy-policy.html)
 

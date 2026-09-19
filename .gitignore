@@ -3,6 +3,10 @@
 .build/
 dist/
 config.toml
+.cache/
+.pycache-codex/
+.pytest_cache/
+.pytest-tmp/
 __pycache__/
 **/__pycache__/
 *.pyc

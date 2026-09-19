@@ -40,6 +40,11 @@ JOB_TERMINAL_STATES = TERMINAL_STATES
 ACTION_TERMINAL_STATES = frozenset({"applied", "failed", "uncertain", "noop"})
 DIRECTORY_REGISTRY_STATE_KEY = "directory_registry.v1"
 _DIRECTORY_REGISTRY_MAX_BYTES = 1024 * 1024
+RUNTIME_CONFIG_STATE_KEY = "runtime_config.v1"
+PAIRING_STATE_KEY = "pairing.v1"
+BEARER_TOKEN_STATE_KEY = "bearer_token.v1"
+TELEGRAM_RUNTIME_CONFIG_STATE_KEY = "runtime.telegram.v1"
+_RUNTIME_CONFIG_MAX_BYTES = 256 * 1024
 STATE_TRANSITIONS = {
     # A browser can finish a very fast 115 submission before it has flushed
     # an explicit accepted event.  The event still carries the same lease and
@@ -1840,3 +1845,207 @@ class QueueStore:
                 (DIRECTORY_REGISTRY_STATE_KEY, encoded.decode("utf-8"), _now()),
             )
         return value
+
+
+@dataclass(frozen=True)
+class TelegramRuntimeConfig:
+    """Durable Telegram settings with a deliberately separate secret field."""
+
+    enabled: bool
+    bot_token: str
+    bot_username: str | None
+    owner_bound: bool
+    updated_at: float
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.bot_token)
+
+    def public_payload(self) -> dict[str, Any]:
+        """Return the stable API shape; never include ``bot_token``."""
+
+        return {
+            "schema": 1,
+            "enabled": self.enabled,
+            "configured": self.configured,
+            "botUsername": self.bot_username,
+            "ownerBound": self.owner_bound,
+        }
+
+
+_UNSET = object()
+
+
+class RuntimeConfigStore:
+    """Small, reusable SQLite-backed store for non-queue bridge state.
+
+    Queue rows remain owned by :class:`QueueStore`; this facade uses the
+    existing ``bridge_state`` table for replaceable versioned JSON snapshots.
+    Secrets can be read by the future Telegram manager through the explicit
+    ``get_telegram_config`` method, while HTTP callers use
+    ``public_telegram_config`` and never receive the token.
+    """
+
+    def __init__(self, queue_store: QueueStore) -> None:
+        if not isinstance(queue_store, QueueStore):
+            raise TypeError("RuntimeConfigStore 需要 QueueStore")
+        self.store = queue_store
+
+    @staticmethod
+    def _decode_object(raw: str | None) -> dict[str, Any] | None:
+        if raw is None:
+            return None
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+            return None
+        return dict(value) if isinstance(value, dict) else None
+
+    def _get_object(self, key: str) -> dict[str, Any] | None:
+        return self._decode_object(self.store.get_state(key))
+
+    def _set_object(self, key: str, value: Mapping[str, Any]) -> None:
+        try:
+            encoded = json.dumps(
+                dict(value),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError, OverflowError, UnicodeError) as error:
+            raise ValueError("runtime config 不是有效 JSON") from error
+        if len(encoded) > _RUNTIME_CONFIG_MAX_BYTES:
+            raise ValueError("runtime config 输入过大")
+        self.store.set_state(key, encoded.decode("utf-8"))
+
+    def get_bearer_token(self) -> str | None:
+        raw = self.store.get_state(BEARER_TOKEN_STATE_KEY)
+        if not raw:
+            return None
+        value = str(raw).strip()
+        return value if len(value) >= 32 else None
+
+    def set_bearer_token(self, token: str) -> str:
+        value = str(token).strip()
+        if len(value) < 32 or len(value) > 512:
+            raise ValueError("bearer token 长度必须在 32 到 512 个字符之间")
+        if any(ord(character) < 0x21 or ord(character) > 0x7E for character in value):
+            raise ValueError("bearer token 只能包含可打印 ASCII 字符")
+        self.store.set_state(BEARER_TOKEN_STATE_KEY, value)
+        return value
+
+    def get_pairing_state(self) -> dict[str, Any] | None:
+        value = self._get_object(PAIRING_STATE_KEY)
+        return dict(value) if value is not None else None
+
+    def set_pairing_state(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(state, Mapping):
+            raise ValueError("pairing state 必须是对象")
+        normalized: dict[str, Any] = {
+            "schema": 1,
+            "paired": bool(state.get("paired", False)),
+            "failures": max(0, int(state.get("failures", 0) or 0)),
+            "closed": bool(state.get("closed", False)),
+        }
+        for key in ("codeHash", "expiresAt", "pairedAt", "pairedClientId"):
+            if key in state and state[key] is not None:
+                normalized[key] = state[key]
+        self._set_object(PAIRING_STATE_KEY, normalized)
+        return normalized
+
+    @staticmethod
+    def _validate_bot_token(value: str) -> str:
+        token = str(value).strip()
+        if len(token) > 512:
+            raise ValueError("Telegram botToken 不能超过 512 个字符")
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in token):
+            raise ValueError("Telegram botToken 不得包含控制字符")
+        return token
+
+    @staticmethod
+    def _validate_bot_username(value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        username = str(value).strip()
+        if len(username) > 64 or any(
+            ord(character) < 0x20 or ord(character) == 0x7F for character in username
+        ):
+            raise ValueError("Telegram botUsername 无效")
+        return username
+
+    def get_telegram_config(self) -> TelegramRuntimeConfig:
+        value = self._get_object(TELEGRAM_RUNTIME_CONFIG_STATE_KEY) or {}
+        token = self._validate_bot_token(str(value.get("botToken", "")))
+        username = self._validate_bot_username(value.get("botUsername"))
+        try:
+            updated_at = float(value.get("updatedAt", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            updated_at = 0.0
+        return TelegramRuntimeConfig(
+            enabled=bool(value.get("enabled", False)),
+            bot_token=token,
+            bot_username=username,
+            owner_bound=bool(value.get("ownerBound", False)),
+            updated_at=updated_at,
+        )
+
+    def ensure_telegram_config(
+        self, *, enabled: bool = False, bot_token: str = ""
+    ) -> TelegramRuntimeConfig:
+        if self.store.get_state(TELEGRAM_RUNTIME_CONFIG_STATE_KEY) is None:
+            return self.set_telegram_config(enabled=enabled, bot_token=bot_token)
+        return self.get_telegram_config()
+
+    def set_telegram_config(
+        self,
+        *,
+        enabled: bool,
+        bot_token: str | None = None,
+    ) -> TelegramRuntimeConfig:
+        current = self.get_telegram_config()
+        token = current.bot_token if bot_token is None else self._validate_bot_token(bot_token)
+        if bool(enabled) and not token:
+            raise ValueError("启用 Telegram 前必须设置 botToken")
+        token_changed = bot_token is not None and token != current.bot_token
+        value = {
+            "schema": 1,
+            "enabled": bool(enabled),
+            "botToken": token,
+            "botUsername": None if token_changed else current.bot_username,
+            "ownerBound": False if token_changed else current.owner_bound,
+            "updatedAt": _now(),
+        }
+        self._set_object(TELEGRAM_RUNTIME_CONFIG_STATE_KEY, value)
+        return self.get_telegram_config()
+
+    def update_telegram_identity(
+        self,
+        *,
+        bot_username: str | None | object = _UNSET,
+        owner_bound: bool | object = _UNSET,
+    ) -> TelegramRuntimeConfig:
+        """Update manager-owned identity fields without exposing the token."""
+
+        current = self.get_telegram_config()
+        username = (
+            current.bot_username
+            if bot_username is _UNSET
+            else self._validate_bot_username(bot_username)  # type: ignore[arg-type]
+        )
+        bound = current.owner_bound if owner_bound is _UNSET else bool(owner_bound)
+        self._set_object(
+            TELEGRAM_RUNTIME_CONFIG_STATE_KEY,
+            {
+                "schema": 1,
+                "enabled": current.enabled,
+                "botToken": current.bot_token,
+                "botUsername": username,
+                "ownerBound": bound,
+                "updatedAt": _now(),
+            },
+        )
+        return self.get_telegram_config()
+
+    def public_telegram_config(self) -> dict[str, Any]:
+        return self.get_telegram_config().public_payload()

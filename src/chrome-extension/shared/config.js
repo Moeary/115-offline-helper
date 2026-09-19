@@ -23,6 +23,7 @@
 		ANIME_LIBRARY: 'push115_anime_library',
 		BRIDGE_ENABLED: 'push115_bridge_enabled',
 		BRIDGE_TOKEN: 'push115_bridge_token',
+		BRIDGE_PAIRED: 'push115_bridge_paired',
 		// Keep the historical key for migration; it stores the Bridge default CID.
 		BRIDGE_TARGET_CID: 'push115_bridge_target_cid',
 		BRIDGE_JOBS: 'push115_bridge_jobs',
@@ -38,6 +39,9 @@
 	// form URL setting.
 	const BRIDGE_BASE_URL = 'http://127.0.0.1:52115'
 	const BRIDGE_ORIGIN = 'http://127.0.0.1:52115'
+	const BRIDGE_BOOTSTRAP_STATUS_PATH = '/bootstrap/status'
+	const BRIDGE_BOOTSTRAP_PAIR_PATH = '/bootstrap/pair'
+	const BRIDGE_TELEGRAM_RUNTIME_PATH = '/v1/runtime/telegram'
 	// Chrome match patterns are host based; the transport itself still checks
 	// the fixed :52115 origin before every request.
 	const BRIDGE_HOST_PERMISSION = 'http://127.0.0.1/*'
@@ -154,6 +158,7 @@
 		[STORAGE_KEYS.CLEAN_NFO]: false,
 		[STORAGE_KEYS.BRIDGE_ENABLED]: false,
 		[STORAGE_KEYS.BRIDGE_TOKEN]: '',
+		[STORAGE_KEYS.BRIDGE_PAIRED]: false,
 		[STORAGE_KEYS.BRIDGE_TARGET_CID]: '0',
 	})
 
@@ -223,6 +228,7 @@
 	])].filter(key => ![
 		STORAGE_KEYS.BRIDGE_ENABLED,
 		STORAGE_KEYS.BRIDGE_TOKEN,
+		STORAGE_KEYS.BRIDGE_PAIRED,
 		STORAGE_KEYS.BRIDGE_TARGET_CID,
 		STORAGE_KEYS.BRIDGE_JOBS,
 		STORAGE_KEYS.BRIDGE_OUTBOX,
@@ -239,6 +245,7 @@
 		for (const key of [
 			STORAGE_KEYS.BRIDGE_ENABLED,
 			STORAGE_KEYS.BRIDGE_TOKEN,
+			STORAGE_KEYS.BRIDGE_PAIRED,
 			STORAGE_KEYS.BRIDGE_TARGET_CID,
 			STORAGE_KEYS.BRIDGE_JOBS,
 			STORAGE_KEYS.BRIDGE_OUTBOX,
@@ -300,6 +307,9 @@
 		PUBLIC_CONFIG_KEYS,
 		BRIDGE_BASE_URL,
 		BRIDGE_ORIGIN,
+		BRIDGE_BOOTSTRAP_STATUS_PATH,
+		BRIDGE_BOOTSTRAP_PAIR_PATH,
+		BRIDGE_TELEGRAM_RUNTIME_PATH,
 		BRIDGE_HOST_PERMISSION,
 		DEFAULT_CONFIG,
 		normalizeCid,

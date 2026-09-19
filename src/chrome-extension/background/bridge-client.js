@@ -11,6 +11,9 @@
 	const BASE_URL = String(configApi.BRIDGE_BASE_URL || 'http://127.0.0.1:52115').replace(/\/$/, '')
 	const ORIGIN = String(configApi.BRIDGE_ORIGIN || 'http://127.0.0.1:52115')
 	const HOST_PERMISSION = String(configApi.BRIDGE_HOST_PERMISSION || 'http://127.0.0.1/*')
+	const BOOTSTRAP_STATUS_PATH = String(configApi.BRIDGE_BOOTSTRAP_STATUS_PATH || '/bootstrap/status')
+	const BOOTSTRAP_PAIR_PATH = String(configApi.BRIDGE_BOOTSTRAP_PAIR_PATH || '/bootstrap/pair')
+	const TELEGRAM_RUNTIME_PATH = String(configApi.BRIDGE_TELEGRAM_RUNTIME_PATH || '/v1/runtime/telegram')
 	const ALARM_NAME = 'push115-bridge-poll'
 	const PERIOD_MINUTES = 0.5
 	const LEASE_SECONDS = 120
@@ -68,6 +71,7 @@
 
 	const ENABLED_KEY = key('BRIDGE_ENABLED', 'push115_bridge_enabled')
 	const TOKEN_KEY = key('BRIDGE_TOKEN', 'push115_bridge_token')
+	const PAIRED_KEY = key('BRIDGE_PAIRED', 'push115_bridge_paired')
 	const TARGET_CID_KEY = key('BRIDGE_TARGET_CID', 'push115_bridge_target_cid')
 	const JOBS_KEY = key('BRIDGE_JOBS', 'push115_bridge_jobs')
 	const OUTBOX_KEY = key('BRIDGE_OUTBOX', 'push115_bridge_outbox')
@@ -106,6 +110,18 @@
 		return token && text.includes(token) ? text.split(token).join('[redacted]') : text
 	}
 
+	function redactSensitivePayload(value, depth = 0) {
+		if (depth > 6) return '[redacted]'
+		if (Array.isArray(value)) return value.map(item => redactSensitivePayload(item, depth + 1))
+		if (!value || typeof value !== 'object') return value
+		const output = {}
+		for (const [name, item] of Object.entries(value)) {
+			if (/token|authorization|secret|password/i.test(name)) output[name] = '[redacted]'
+			else output[name] = redactSensitivePayload(item, depth + 1)
+		}
+		return output
+	}
+
 	function errorCode(error, fallback = 'BRIDGE_ERROR') {
 		const raw = String(error?.code || fallback).trim().toUpperCase()
 		return /^[A-Z0-9_.:-]{1,80}$/.test(raw) ? raw : fallback
@@ -123,11 +139,13 @@
 		const values = await getStorage([
 			ENABLED_KEY,
 			TOKEN_KEY,
+			PAIRED_KEY,
 			TARGET_CID_KEY,
 		])
 		return {
 			enabled: values[ENABLED_KEY] === true,
 			token: String(values[TOKEN_KEY] || '').trim(),
+			paired: values[PAIRED_KEY] === true,
 			defaultCid: normalizeCid(values[TARGET_CID_KEY], '0'),
 		}
 	}
@@ -289,7 +307,7 @@
 					uncertain: Number(response.status) >= 500 || Number(response.status) === 408,
 				})
 				error.responseBody = scrubWithToken(typeof body === 'string' ? body : '', token)
-				if (body && typeof body === 'object') error.responsePayload = body
+				if (body && typeof body === 'object') error.responsePayload = redactSensitivePayload(body)
 				return Promise.reject(error)
 			}
 			// Event handlers may legitimately answer 204; callers that require a
@@ -352,12 +370,21 @@
 		}
 	}
 
-	function bridgeUrl(path) {
+	function bridgeUrl(path, allowBootstrap = false) {
 		const rawPath = String(path || '')
 		const jobEventPath = /^\/v1\/jobs\/[^\/?#]+\/events$/
 		const actionEventPath = /^\/v1\/actions\/[^\/?#]+\/events$/
 		const directoryRegistryPath = '/v1/runtime/directories'
-		if (rawPath !== '/v1/jobs/claim' && rawPath !== '/v1/actions/claim' && rawPath !== directoryRegistryPath && !jobEventPath.test(rawPath) && !actionEventPath.test(rawPath)) {
+		const isBootstrapPath = rawPath === BOOTSTRAP_STATUS_PATH || rawPath === BOOTSTRAP_PAIR_PATH
+		const validAuthenticatedPath = (
+			rawPath === '/v1/jobs/claim'
+			|| rawPath === '/v1/actions/claim'
+			|| rawPath === directoryRegistryPath
+			|| rawPath === TELEGRAM_RUNTIME_PATH
+			|| jobEventPath.test(rawPath)
+			|| actionEventPath.test(rawPath)
+		)
+		if (allowBootstrap ? !isBootstrapPath : !validAuthenticatedPath) {
 			throw bridgeError('bridge 路径无效', 'BRIDGE_INVALID_PATH')
 		}
 		let url
@@ -368,16 +395,14 @@
 		return url.toString()
 	}
 
-	async function requestJson(path, body, token, method = 'POST') {
+	async function requestInternal(path, body, token, method, allowBootstrap = false) {
 		const auth = String(token || '').trim()
-		if (!auth) throw bridgeError('未配置 bridge Bearer token', 'BRIDGE_TOKEN_MISSING')
-		const url = bridgeUrl(path)
+		if (!allowBootstrap && !auth) throw bridgeError('未配置 bridge Bearer token', 'BRIDGE_TOKEN_MISSING')
+		const url = bridgeUrl(path, allowBootstrap)
 		const requestMethod = String(method || 'POST').trim().toUpperCase()
 		if (!['GET', 'POST', 'PUT'].includes(requestMethod)) throw bridgeError('bridge 请求方法无效', 'BRIDGE_INVALID_METHOD')
-		const headers = {
-			Accept: 'application/json',
-			Authorization: `Bearer ${auth}`,
-		}
+		const headers = { Accept: 'application/json' }
+		if (auth) headers.Authorization = `Bearer ${auth}`
 		if (requestMethod !== 'GET' && body !== undefined && body !== null) headers['Content-Type'] = 'application/json'
 		const requestOptions = {
 			method: requestMethod,
@@ -421,6 +446,17 @@
 		}
 	}
 
+	async function requestJson(path, body, token, method = 'POST') {
+		return requestInternal(path, body, token, method, false)
+	}
+
+	// Bootstrap is deliberately separate from requestJson: these two endpoints
+	// are the only unauthenticated paths.  Keeping a distinct entry point makes
+	// it impossible for a normal /v1 call to silently lose its Bearer header.
+	async function requestBootstrapJson(path, body, method = 'GET') {
+		return requestInternal(path, body, '', method, true)
+	}
+
 	async function hasPermission() {
 		if (!chrome.permissions?.contains) return true
 		try {
@@ -448,6 +484,203 @@
 			return generated
 		})()
 		return workerIdPromise
+	}
+
+	function normalizeBootstrapStatus(result) {
+		if (!result || typeof result !== 'object' || Array.isArray(result)) {
+			throw bridgeError('bridge bootstrap 状态格式无效', 'BRIDGE_INVALID_BOOTSTRAP_STATUS', { uncertain: true })
+		}
+		return {
+			schema: Number(result.schema) || 1,
+			version: scrub(result.version, 64),
+			paired: result.paired === true,
+			pairingAvailable: result.pairingAvailable === true,
+		}
+	}
+
+	function normalizePairingCode(value) {
+		const code = String(value || '').trim().replace(/[\s]+/g, '-')
+		if (!code || code.length > 128) throw bridgeError('请输入有效的 Bridge 配对码', 'BRIDGE_PAIRING_CODE_REQUIRED')
+		return code.toUpperCase()
+	}
+
+	function pairedToken(result) {
+		const token = String(result?.bearerToken || result?.token || '').trim()
+		if (!token || /\s/.test(token) || token.length > 4096) {
+			throw bridgeError('bridge 配对响应缺少有效 Bearer token', 'BRIDGE_INVALID_PAIRING_RESPONSE', { uncertain: true })
+		}
+		return token
+	}
+
+	function normalizeTelegramUsername(value) {
+		const username = String(value || '').trim().replace(/^@+/, '')
+		return /^[A-Za-z0-9_]{1,64}$/.test(username) ? username : ''
+	}
+
+	function safeTelegramClaimUrl(value) {
+		const raw = String(value || '').trim()
+		if (!raw) return ''
+		try {
+			const url = new URL(raw)
+			const hostname = String(url.hostname || '').toLowerCase()
+			const username = String(url.pathname || '').replace(/^\//, '')
+			const start = url.searchParams.get('start') || ''
+			if (url.protocol !== 'https:' || hostname !== 't.me') return ''
+			if (!normalizeTelegramUsername(username) || !/^claim_[A-Za-z0-9_-]{1,128}$/.test(start)) return ''
+			return url.toString()
+		} catch (error) {
+			return ''
+		}
+	}
+
+	function telegramClaimUrl(result, botUsername) {
+		const nestedClaim = result?.ownerClaim && typeof result.ownerClaim === 'object'
+			? result.ownerClaim : null
+		const candidates = [
+			result?.ownerClaimUrl,
+			result?.ownerClaimLink,
+			result?.ownerClaimDeepLink,
+			result?.claimUrl,
+			result?.claimLink,
+			nestedClaim?.url,
+		]
+		for (const candidate of candidates) {
+			const safe = safeTelegramClaimUrl(candidate)
+			if (safe) return safe
+		}
+		const nonce = String(
+			result?.ownerClaimNonce
+			|| result?.claimNonce
+			|| nestedClaim?.nonce
+			|| '',
+		).trim()
+		if (!botUsername || !/^claim_[A-Za-z0-9_-]{1,128}$/.test(nonce)) return ''
+		return safeTelegramClaimUrl(`https://t.me/${botUsername}?start=${encodeURIComponent(nonce)}`)
+	}
+
+	function normalizeTelegramStatus(result) {
+		if (!result || typeof result !== 'object' || Array.isArray(result)) {
+			throw bridgeError('Telegram 运行时状态格式无效', 'BRIDGE_INVALID_TELEGRAM_STATUS', { uncertain: true })
+		}
+		const botUsername = normalizeTelegramUsername(result.botUsername || result.bot_username)
+		return {
+			schema: Number(result.schema) || 1,
+			enabled: result.enabled === true,
+			configured: result.configured === true,
+			botUsername,
+			ownerBound: result.ownerBound === true || result.owner_bound === true,
+			ownerClaimUrl: telegramClaimUrl(result, botUsername),
+		}
+	}
+
+	async function storedBridgeToken(token = undefined) {
+		if (token !== undefined) return String(token || '').trim()
+		return (await readConfig()).token
+	}
+
+	async function bootstrapStatus() {
+		return normalizeBootstrapStatus(await requestBootstrapJson(BOOTSTRAP_STATUS_PATH, undefined, 'GET'))
+	}
+
+	async function syncStoredDirectoryAfterPair() {
+		const sync = background.DirectoryIndex?.syncStored
+		if (typeof sync === 'function') return sync()
+		const sendMessage = chrome.runtime?.sendMessage
+		if (typeof sendMessage !== 'function') return { skipped: true, reason: 'directory_index_unavailable' }
+		return new Promise(resolve => {
+			let settled = false
+			const finish = value => {
+				if (settled) return
+				settled = true
+				resolve(value)
+			}
+			try {
+				sendMessage({ action: 'SYNC_DIRECTORY_INDEX' }, response => {
+					if (chrome.runtime?.lastError) {
+						finish({ skipped: true, reason: 'directory_index_sync_failed', error: scrub(chrome.runtime.lastError.message) })
+						return
+					}
+					finish(response?.success === false
+						? { skipped: true, reason: 'directory_index_sync_failed', error: scrub(response.error) }
+						: response || { success: true })
+				})
+			} catch (error) {
+				finish({ skipped: true, reason: 'directory_index_sync_failed', error: scrub(error?.message || error) })
+			}
+		})
+	}
+
+	async function pairBridge(pairingCode, clientId = undefined) {
+		const code = normalizePairingCode(pairingCode)
+		const resolvedClientId = String(clientId || '').trim() || await workerId()
+		const result = await requestBootstrapJson(BOOTSTRAP_PAIR_PATH, {
+			schema: 1,
+			pairingCode: code,
+			clientId: scrub(resolvedClientId, 128),
+		}, 'POST')
+		const token = pairedToken(result)
+		await setStorage({
+			[TOKEN_KEY]: token,
+			[ENABLED_KEY]: true,
+			[PAIRED_KEY]: true,
+		})
+		let directorySync
+		try {
+			directorySync = await syncStoredDirectoryAfterPair()
+		} catch (error) {
+			directorySync = { skipped: true, reason: 'directory_index_sync_failed', error: scrub(error?.message || error) }
+		}
+		// Do not return the bearer token to the options page or render it in UI.
+		return {
+			schema: Number(result?.schema) || 1,
+			paired: true,
+			pairingAvailable: false,
+			tokenStored: true,
+			directorySync,
+		}
+	}
+
+	async function getTelegramStatus(token = undefined) {
+		const auth = await storedBridgeToken(token)
+		return normalizeTelegramStatus(await requestJson(TELEGRAM_RUNTIME_PATH, undefined, auth, 'GET'))
+	}
+
+	async function updateTelegramRuntime(details = {}, token = undefined) {
+		const auth = await storedBridgeToken(token)
+		const source = typeof details === 'object' && details !== null ? details : {}
+		const body = {
+			schema: 1,
+			enabled: source.enabled === true,
+		}
+		if (Object.prototype.hasOwnProperty.call(source, 'botToken')) {
+			const botToken = String(source.botToken || '').trim()
+			if (botToken.length > 4096 || /[\r\n]/.test(botToken)) {
+				throw bridgeError('Telegram Bot Token 格式无效', 'BRIDGE_INVALID_TELEGRAM_TOKEN')
+			}
+			body.botToken = botToken
+		}
+		return normalizeTelegramStatus(await requestJson(TELEGRAM_RUNTIME_PATH, body, auth, 'PUT'))
+	}
+
+	async function configureTelegram(details = {}, token = undefined) {
+		if (typeof details === 'string') return updateTelegramRuntime({ enabled: true, botToken: details }, token)
+		return updateTelegramRuntime(details, token)
+	}
+
+	async function startTelegram(botToken = undefined, token = undefined) {
+		const details = { enabled: true }
+		if (botToken !== undefined && botToken !== null) details.botToken = botToken
+		return updateTelegramRuntime(details, token)
+	}
+
+	async function stopTelegram(token = undefined) {
+		return updateTelegramRuntime({ enabled: false }, token)
+	}
+
+	async function restartTelegram(botToken = undefined, token = undefined) {
+		const auth = await storedBridgeToken(token)
+		await updateTelegramRuntime({ enabled: false }, auth)
+		return startTelegram(botToken, auth)
 	}
 
 	function normalizeActionId(value, field = 'actionId') {
@@ -1589,6 +1822,9 @@
 		BASE_URL,
 		ORIGIN,
 		HOST_PERMISSION,
+		BOOTSTRAP_STATUS_PATH,
+		BOOTSTRAP_PAIR_PATH,
+		TELEGRAM_RUNTIME_PATH,
 		ALARM_NAME,
 		PERIOD_MINUTES,
 		LEASE_SECONDS,
@@ -1601,6 +1837,19 @@
 		readActions,
 		readActionOutbox,
 		requestJson,
+		requestBootstrapJson,
+		bootstrapStatus,
+		getBootstrapStatus: bootstrapStatus,
+		pairBridge,
+		pair: pairBridge,
+		getTelegramStatus,
+		configureTelegram,
+		setTelegramConfig: configureTelegram,
+		updateTelegramRuntime,
+		startTelegram,
+		stopTelegram,
+		restartTelegram,
+		normalizeTelegramStatus,
 		claimJob,
 		claimAction,
 		flushOutbox,

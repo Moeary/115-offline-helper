@@ -45,6 +45,11 @@ _ADD_COMMAND = re.compile(
 )
 _DIR_COMMAND = re.compile(r"^/(?:dir|path)(?:@[A-Za-z0-9_]{1,64})?\s*$", re.IGNORECASE)
 _JOBS_COMMAND = re.compile(r"^/jobs(?:@[A-Za-z0-9_]{1,64})?\s*$", re.IGNORECASE)
+_START_COMMAND = re.compile(
+    r"^/start(?:@[A-Za-z0-9_]{1,64})?(?:\s+([A-Za-z0-9_-]{1,128}))?\s*$",
+    re.IGNORECASE,
+)
+_CLAIM_PAYLOAD = re.compile(r"^claim_([A-Za-z0-9_-]{16,96})$")
 _MAX_CANDIDATES = 24
 _MAX_CAPTION = 1024
 _MAX_BUTTON_TEXT = 56
@@ -61,6 +66,9 @@ class TelegramError(RuntimeError):
 
 
 class TelegramTransport(Protocol):
+    async def get_me(self) -> Mapping[str, Any]:
+        ...
+
     async def get_updates(self, *, offset: int | None, timeout: int) -> list[dict[str, Any]]:
         ...
 
@@ -133,6 +141,14 @@ class HttpTelegramTransport:
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    async def get_me(self) -> Mapping[str, Any]:
+        """Validate the token and return the non-sensitive bot metadata."""
+
+        result = await self.request("getMe")
+        if not isinstance(result, Mapping):
+            raise TelegramError("Telegram getMe 返回格式无效")
+        return result
 
     async def request(self, method: str, payload: Mapping[str, Any] | None = None) -> Any:
         """Call one Bot API method without putting the token in error text."""
@@ -301,6 +317,9 @@ class TelegramService:
         save_paths: Sequence[Any] = (),
         callback_ttl_seconds: int = 900,
         poll_timeout: int = 25,
+        owner_getter: Any | None = None,
+        claim_handler: Any | None = None,
+        bot_username: str = "",
         clock: Any = time.time,
     ) -> None:
         self.store = store
@@ -323,6 +342,9 @@ class TelegramService:
         self._save_path_map = {cid: name for cid, name in self.save_paths}
         self.callback_ttl_seconds = max(60, min(int(callback_ttl_seconds), 86400))
         self.poll_timeout = max(0, min(int(poll_timeout), 50))
+        self.owner_getter = owner_getter
+        self.claim_handler = claim_handler
+        self.bot_username = str(bot_username or "").strip().lstrip("@").strip()
         self.clock = clock
         saved_offset = None
         get_state = getattr(store, "get_state", None)
@@ -339,6 +361,23 @@ class TelegramService:
     def authorized(self, chat_id: object, user_id: object) -> bool:
         chat = _int(chat_id)
         user = _int(user_id)
+        if self.owner_getter is not None:
+            if chat is None or user is None:
+                return False
+            try:
+                owner = self.owner_getter()
+            except Exception:
+                return False
+            if not isinstance(owner, Mapping):
+                return False
+            owner_chat = _int(owner.get("chatId", owner.get("chat_id")))
+            owner_user = _int(owner.get("userId", owner.get("user_id")))
+            return (
+                owner_chat is not None
+                and owner_user is not None
+                and chat == owner_chat
+                and user == owner_user
+            )
         if chat is None or user is None or chat not in self.allowed_chat_ids:
             return False
         return not self.allowed_user_ids or user in self.allowed_user_ids
@@ -1267,9 +1306,47 @@ class TelegramService:
 
     async def _handle_command(self, message: Mapping[str, Any]) -> dict[str, Any]:
         chat_id, user_id = self._chat_user(message)
+        text = str(message.get("text", "") or "").strip()
+        start_match = _START_COMMAND.fullmatch(text)
+        if start_match and self.claim_handler is not None:
+            claim_payload = str(start_match.group(1) or "").strip()
+            claim_match = _CLAIM_PAYLOAD.fullmatch(claim_payload)
+            if chat_id is not None and user_id is not None and claim_match:
+                claimed = False
+                try:
+                    claimed = bool(
+                        self.claim_handler(
+                            claim_match.group(1),
+                            chat_id,
+                            user_id,
+                        )
+                    )
+                except Exception:
+                    claimed = False
+                if claimed:
+                    await self.transport.send_message(
+                        chat_id,
+                        "✅ 已绑定为管理员。",
+                    )
+                    return {
+                        "handled": True,
+                        "kind": "owner_claim",
+                        "ownerBound": True,
+                    }
+                await self.transport.send_message(
+                    chat_id,
+                    "绑定链接已失效，请在 Bridge 设置中重新生成。",
+                )
+                return {
+                    "handled": True,
+                    "kind": "owner_claim",
+                    "ownerBound": False,
+                    "error": "invalid_claim",
+                }
+            if not self.authorized(chat_id, user_id):
+                return {"ignored": True, "reason": "unauthorized"}
         if not self.authorized(chat_id, user_id):
             return {"ignored": True, "reason": "unauthorized"}
-        text = str(message.get("text", "") or "").strip()
         add_match = _ADD_COMMAND.fullmatch(text)
         if add_match:
             return await self._handle_add(message, add_match.group(1))

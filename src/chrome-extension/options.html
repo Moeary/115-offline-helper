@@ -111,6 +111,75 @@
 							<p data-i18n="bridge_subtitle">从本机服务领取候选任务并提交到 115。地址固定为 http://127.0.0.1:52115，不会读取网页 Cookie。</p>
 						</div>
 						<div class="push115-bridge-panel">
+							<div class="push115-bridge-onboarding">
+								<div class="push115-bridge-section-heading">
+									<div>
+										<h4 data-i18n="bridge_pairing_title">快速配对</h4>
+										<p data-i18n="bridge_pairing_hint">Bridge 启动后会在终端显示一次性配对码；配对成功后，Bearer token 会安全保存在扩展本地。</p>
+									</div>
+									<button class="push115-btn push115-btn-secondary" id="push115-bridge-refresh" type="button" data-i18n="bridge_refresh_button">检查 Bridge</button>
+								</div>
+								<div class="push115-bridge-status-row">
+									<strong data-i18n="bridge_status_label">Bridge 状态</strong>
+									<span id="push115-bridge-bootstrap-status" class="push115-status-text" aria-live="polite"></span>
+								</div>
+								<div class="push115-field-grid push115-bridge-pairing-fields">
+									<div class="push115-field">
+										<label for="push115-bridge-pairing-code" data-i18n="bridge_pairing_code_label">配对码</label>
+										<input id="push115-bridge-pairing-code" type="text" autocomplete="one-time-code" inputmode="text" spellcheck="false" maxlength="32" data-placeholder="bridge_pairing_code_placeholder" placeholder="例如：K7MP-4Q2D" />
+									</div>
+									<div class="push115-field push115-bridge-pairing-action">
+										<label aria-hidden="true">&nbsp;</label>
+										<button class="push115-btn push115-btn-primary" id="push115-bridge-pair" type="button" data-i18n="bridge_pair_button">配对并启用</button>
+									</div>
+								</div>
+								<p id="push115-bridge-pair-status" class="push115-status" role="status" aria-live="polite"></p>
+							</div>
+
+							<div class="push115-bridge-telegram">
+								<div class="push115-bridge-section-heading">
+									<div>
+										<h4 data-i18n="telegram_title">Telegram Bot</h4>
+										<p data-i18n="telegram_hint">Bot Token 只用于配置本地 Bridge；扩展不会在状态、日志或页面文字中回显它。</p>
+									</div>
+									<button class="push115-btn push115-btn-secondary" id="push115-telegram-refresh" type="button" data-i18n="telegram_refresh_button">刷新状态</button>
+								</div>
+								<div class="push115-field-grid">
+									<div class="push115-field">
+										<label for="push115-telegram-token" data-i18n="telegram_token_label">Bot Token</label>
+										<input id="push115-telegram-token" type="password" autocomplete="new-password" spellcheck="false" />
+										<p class="push115-hint" data-i18n="telegram_token_hint">仅在首次配置或更换 Bot 时填写；读取状态不会返回 token。</p>
+									</div>
+									<div class="push115-field push115-telegram-configure-action">
+										<label aria-hidden="true">&nbsp;</label>
+										<button class="push115-btn push115-btn-primary" id="push115-telegram-configure" type="button" data-i18n="telegram_connect_button">连接 Telegram</button>
+									</div>
+								</div>
+								<div class="push115-telegram-actions">
+									<button class="push115-btn push115-btn-secondary" id="push115-telegram-start" type="button" data-i18n="telegram_start_button">启动</button>
+									<button class="push115-btn push115-btn-secondary" id="push115-telegram-stop" type="button" data-i18n="telegram_stop_button">停止</button>
+									<button class="push115-btn push115-btn-secondary" id="push115-telegram-restart" type="button" data-i18n="telegram_restart_button">重启</button>
+								</div>
+								<div class="push115-telegram-status" aria-live="polite">
+									<div class="push115-bridge-status-row">
+										<strong data-i18n="telegram_status_label">Telegram 状态</strong>
+										<span id="push115-telegram-status-text" class="push115-status-text"></span>
+									</div>
+									<div class="push115-bridge-status-row">
+										<strong data-i18n="telegram_bot_label">机器人</strong>
+										<span id="push115-telegram-bot-name" class="push115-status-text"></span>
+									</div>
+									<div class="push115-bridge-status-row">
+										<strong data-i18n="telegram_owner_label">管理员</strong>
+										<span id="push115-telegram-owner-status" class="push115-status-text"></span>
+									</div>
+									<a id="push115-telegram-claim-link" class="push115-telegram-claim-link" href="#" target="_blank" rel="noopener noreferrer" hidden data-i18n="telegram_claim_link">打开 Telegram 绑定管理员</a>
+								</div>
+								<p id="push115-telegram-status-message" class="push115-status" role="status" aria-live="polite"></p>
+							</div>
+
+							<details class="push115-bridge-advanced">
+								<summary data-i18n="bridge_advanced_title">高级配置（手工 token / 目录）</summary>
 							<label class="push115-toggle push115-bridge-enabled">
 								<input id="push115-bridge-enabled" type="checkbox" />
 								<span>
@@ -131,6 +200,7 @@
 								</div>
 							</div>
 							<p id="push115-bridge-permission-hint" class="push115-hint push115-bridge-permission-hint" data-i18n="bridge_permission_hint">首次启用会请求 http://127.0.0.1/* 的可选权限。</p>
+							</details>
 						</div>
 
 						<div class="push115-divider"></div>
@@ -203,6 +273,7 @@
 		</div>
 
 		<script src="shared/config.js"></script>
+		<script src="background/bridge-client.js"></script>
 		<script src="shared/path-utils.js"></script>
 		<script src="shared/messaging.js"></script>
 		<script src="ui/options/site-profiles.js"></script>

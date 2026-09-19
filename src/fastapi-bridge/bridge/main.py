@@ -6,7 +6,7 @@ import argparse
 import sys
 
 from .app import create_app
-from .config import Settings, load_or_create_token
+from .config import PairingWindowClosed, Settings, load_or_create_token
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -15,6 +15,16 @@ def _parser() -> argparse.ArgumentParser:
         "--print-token",
         action="store_true",
         help="print the configured/generated bearer token and exit",
+    )
+    parser.add_argument(
+        "--print-pairing",
+        action="store_true",
+        help="print the current local pairing information and exit",
+    )
+    parser.add_argument(
+        "--pair",
+        action="store_true",
+        help="start the bridge and print local pairing information",
     )
     return parser
 
@@ -35,6 +45,22 @@ def main(argv: list[str] | None = None) -> int:
             token = load_or_create_token(settings.token_file)
         print(token)
         return 0
+    if args.print_pairing:
+        application = create_app(settings)
+        try:
+            pairing = application.state.pairing_manager
+            code = pairing.current_code
+            if code is None:
+                status = pairing.status()
+                print(
+                    f"Bridge 已完成配对或配对窗口已关闭（paired={status.paired}）"
+                )
+                return 1
+            print(f"配对码: {code}")
+            print(f"有效期至（Unix time）: {int(pairing.status().expires_at or 0)}")
+            return 0
+        finally:
+            application.state.store.close()
     try:
         import uvicorn
     except ImportError:
@@ -44,6 +70,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     application = create_app(settings)
+    pairing = application.state.pairing_manager
+    if args.pair:
+        try:
+            # An explicit ``bridge-pair`` command is the documented recovery
+            # path after a browser reinstall.  It rotates the pairing window;
+            # the old Bearer token remains valid until a new client pairs.
+            pairing.open_window(force=True)
+        except PairingWindowClosed:
+            pass
+    code = pairing.current_code
+    if code is not None:
+        print(
+            f"115 Offline Helper Bridge 1.11.0 配对码: {code} "
+            f"（5 分钟内有效，最多失败 5 次）",
+            flush=True,
+        )
+    elif pairing.status().paired:
+        print("115 Offline Helper Bridge 已完成配对。", flush=True)
     uvicorn.run(application, host=settings.host, port=settings.port, log_level="info")
     return 0
 

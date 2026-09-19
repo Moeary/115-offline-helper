@@ -9,17 +9,24 @@ import json
 import math
 import re
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import authenticate
-from .config import Settings
+from .config import (
+    PairingCodeInvalid,
+    PairingManager,
+    PairingWindowClosed,
+    Settings,
+)
 from .db import (
     ActionRecord,
     LeaseConflict,
     QueueStore,
+    RuntimeConfigStore,
     StateConflict,
     UnknownAction,
     UnknownJob,
@@ -31,10 +38,13 @@ from .schemas import (
     ActionCommandRequest,
     ActionEventRequest,
     ClaimRequest,
+    BootstrapPairRequest,
     DirectoryRegistryRequest,
     EventRequest,
+    TelegramRuntimeRequest,
 )
-from .telegram import HttpTelegramTransport, TelegramService
+from .telegram import TelegramError, TelegramService
+from .telegram_manager import TelegramManager
 
 
 def _unauthorized() -> HTTPException:
@@ -159,56 +169,67 @@ def create_app(
     """Create an isolated app instance suitable for production or tests.
 
     Dependencies can be injected by tests without making network calls.  The
-    default factory constructs a JavBus provider and, when configured, a raw
-    Telegram Bot API transport.  No polling task starts until the application
-    lifespan is entered and ``telegram_polling`` is enabled.
+    default factory constructs a JavBus provider and a replaceable Telegram
+    manager. Telegram validation and polling are restored during lifespan;
+    changing the token never requires a FastAPI restart.
     """
 
     settings = settings or Settings.from_env()
     owns_store = store is None
     owns_provider = provider is None
     queue = store or QueueStore(settings.db_path, default_lease_seconds=settings.lease_seconds)
+    runtime_config = RuntimeConfigStore(queue)
+    runtime_telegram = runtime_config.ensure_telegram_config(
+        enabled=settings.telegram_polling,
+        bot_token=settings.telegram_bot_token,
+    )
+    pairing = PairingManager(
+        runtime_config,
+        token_file=settings.token_file,
+        initial_token=settings.bearer_token,
+    )
     av_provider = provider or JavBusProvider(
         settings.javbus_base_url,
         allowed_hosts=settings.javbus_allowed_hosts,
         timeout_seconds=settings.javbus_timeout_seconds,
         max_response_bytes=settings.javbus_max_response_bytes,
     )
-    owns_anime_provider = False
-    nyaa_provider = anime_provider
-    owns_telegram_transport = False
-    transport = None
+    owns_anime_provider = anime_provider is None
+    nyaa_provider = anime_provider or NyaaRssProvider(
+        settings.nyaa_base_url,
+        allowed_hosts=settings.nyaa_allowed_hosts,
+        timeout_seconds=settings.nyaa_timeout_seconds,
+        max_response_bytes=settings.nyaa_max_response_bytes,
+        max_results=settings.nyaa_max_results,
+    )
+    telegram_token_file = getattr(settings, "telegram_token_file", None)
+    if not isinstance(telegram_token_file, (str, Path)):
+        telegram_token_file = Path(str(settings.token_file)).with_name("telegram_bot.token")
+    telegram_manager = TelegramManager(
+        queue,
+        av_provider,
+        anime_provider=nyaa_provider,
+        token_file=telegram_token_file,
+        initial_token=runtime_telegram.bot_token,
+        enabled=runtime_telegram.enabled,
+        allowed_chat_ids=settings.telegram_allowed_chat_ids,
+        allowed_user_ids=settings.telegram_allowed_user_ids,
+        save_paths=settings.telegram_save_paths,
+        callback_ttl_seconds=settings.callback_ttl_seconds,
+        poll_timeout=settings.telegram_poll_timeout,
+    )
     service = telegram_service
-    if service is None and settings.telegram_bot_token:
-        if nyaa_provider is None:
-            nyaa_provider = NyaaRssProvider(
-                settings.nyaa_base_url,
-                allowed_hosts=settings.nyaa_allowed_hosts,
-                timeout_seconds=settings.nyaa_timeout_seconds,
-                max_response_bytes=settings.nyaa_max_response_bytes,
-                max_results=settings.nyaa_max_results,
-            )
-            owns_anime_provider = True
-        transport = HttpTelegramTransport(settings.telegram_bot_token)
-        owns_telegram_transport = True
-        service = TelegramService(
-            queue,
-            av_provider,
-            transport,
-            anime_provider=nyaa_provider,
-            allowed_chat_ids=settings.telegram_allowed_chat_ids,
-            allowed_user_ids=settings.telegram_allowed_user_ids,
-            save_paths=settings.telegram_save_paths,
-            callback_ttl_seconds=settings.callback_ttl_seconds,
-            poll_timeout=settings.telegram_poll_timeout,
-        )
 
     poll_task: asyncio.Task[Any] | None = None
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         nonlocal poll_task
-        if service is not None and settings.telegram_polling:
+        if service is None:
+            await telegram_manager.restore()
+            sync_telegram_runtime_metadata()
+            _app.state.telegram = telegram_manager.service
+        elif runtime_config.get_telegram_config().enabled:
             poll_task = asyncio.create_task(service.run_forever())
         try:
             yield
@@ -222,8 +243,8 @@ def create_app(
                 except asyncio.CancelledError:
                     pass
                 poll_task = None
-            if owns_telegram_transport and transport is not None:
-                await transport.aclose()
+            if service is None:
+                await telegram_manager.close()
             if owns_provider and hasattr(av_provider, "aclose"):
                 await av_provider.aclose()
             if owns_anime_provider and nyaa_provider is not None and hasattr(nyaa_provider, "aclose"):
@@ -233,29 +254,111 @@ def create_app(
 
     app = FastAPI(
         title="115 Offline Helper Bridge",
-        version="0.1.0",
+        version="1.11.0",
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,
     )
-    if settings.cors_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=list(settings.cors_origins),
-            allow_credentials=False,
-            allow_methods=["GET", "POST", "PUT", "OPTIONS"],
-            allow_headers=["Accept", "Authorization", "Content-Type"],
-            max_age=600,
-        )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_origin_regex=r"^chrome-extension://[a-p]{32}$",
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+        allow_headers=["Accept", "Authorization", "Content-Type"],
+        max_age=600,
+    )
     app.state.settings = settings
     app.state.store = queue
+    app.state.runtime_config_store = runtime_config
+    app.state.runtime_config = runtime_config
+    app.state.pairing_manager = pairing
+    app.state.pairing = pairing
+    app.state.telegram_manager = telegram_manager
     app.state.provider = av_provider
     app.state.anime_provider = nyaa_provider
-    app.state.telegram = service
+    app.state.telegram = service or telegram_manager.service
+
+    def sync_telegram_runtime_metadata() -> None:
+        """Keep public runtime metadata durable without exposing the token."""
+
+        if service is not None:
+            return
+        status = telegram_manager.status()
+        try:
+            runtime_config.set_telegram_config(
+                enabled=bool(status.get("enabled")),
+                bot_token=telegram_manager.token if status.get("configured") else "",
+            )
+            runtime_config.update_telegram_identity(
+                bot_username=status.get("botUsername"),
+                owner_bound=bool(status.get("ownerBound")),
+            )
+        except (TypeError, ValueError, OSError):
+            # The token file/queue remains authoritative for the running
+            # manager; metadata sync must not take the bridge down.
+            pass
 
     async def require_auth(authorization: str | None = Header(default=None)) -> None:
-        if not authenticate(authorization, settings.bearer_token):
+        if not authenticate(authorization, pairing.current_token):
             raise _unauthorized()
+
+    @app.get("/bootstrap/status")
+    async def bootstrap_status() -> dict[str, Any]:
+        """Return non-secret local onboarding state without Bearer auth."""
+
+        return pairing.status().as_dict()
+
+    @app.post("/bootstrap/pair")
+    async def bootstrap_pair(payload: BootstrapPairRequest) -> dict[str, Any]:
+        try:
+            token = pairing.pair(
+                payload.normalized_code,
+                client_id=payload.client_id,
+            )
+        except PairingCodeInvalid as error:
+            raise HTTPException(
+                status_code=401,
+                detail="配对码无效",
+                headers={"WWW-Authenticate": "Pairing"},
+            ) from error
+        except PairingWindowClosed as error:
+            status = pairing.status()
+            status_code = 409 if status.paired else 410
+            raise HTTPException(status_code=status_code, detail=str(error)) from error
+        status = pairing.status()
+        return {
+            **status.as_dict(),
+            "bearerToken": token,
+        }
+
+    @app.get("/v1/runtime/telegram")
+    async def get_telegram_runtime(
+        _auth: None = Depends(require_auth),
+    ) -> dict[str, Any]:
+        sync_telegram_runtime_metadata()
+        return telegram_manager.status()
+
+    @app.put("/v1/runtime/telegram")
+    async def put_telegram_runtime(
+        payload: TelegramRuntimeRequest,
+        _auth: None = Depends(require_auth),
+    ) -> dict[str, Any]:
+        try:
+            value = await telegram_manager.configure(
+                payload.bot_token,
+                enabled=payload.enabled,
+            )
+        except TelegramError as error:
+            raise HTTPException(
+                status_code=502,
+                detail="Telegram Bot token 验证失败",
+            ) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        sync_telegram_runtime_metadata()
+        app.state.telegram = telegram_manager.service
+        return value
 
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:

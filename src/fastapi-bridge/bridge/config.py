@@ -5,6 +5,10 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import hashlib
+import hmac
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Mapping
@@ -15,7 +19,16 @@ from urllib.parse import urlsplit
 BRIDGE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STATE_DIR = BRIDGE_ROOT / ".state"
 DEFAULT_TOKEN_FILE = DEFAULT_STATE_DIR / "bearer.token"
+DEFAULT_TELEGRAM_TOKEN_FILE = DEFAULT_STATE_DIR / "telegram_bot.token"
 DEFAULT_DB_FILE = DEFAULT_STATE_DIR / "bridge.sqlite3"
+
+# The pairing code is deliberately independent from the bearer token.  It is
+# short enough to type locally, but still has 40 bits of entropy before the
+# retry limit and five-minute expiry are applied.
+PAIRING_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+PAIRING_CODE_LENGTH = 8
+PAIRING_CODE_TTL_SECONDS = 5 * 60
+PAIRING_MAX_FAILURES = 5
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -183,6 +196,16 @@ def _write_secret(path: Path, value: str) -> None:
         pass
 
 
+def persist_secret(path: str | Path, value: str) -> None:
+    """Persist a local secret with the same permissions as the token file.
+
+    This small public wrapper lets the pairing manager rotate the bearer token
+    without exposing the lower-level file-writing helper to the application.
+    """
+
+    _write_secret(Path(path), value)
+
+
 def load_or_create_token(path: Path = DEFAULT_TOKEN_FILE) -> str:
     """Load a token or create it with the OS CSPRNG.
 
@@ -228,6 +251,7 @@ class Settings:
     nyaa_max_response_bytes: int = 2_000_000
     nyaa_max_results: int = 20
     telegram_save_paths: tuple[TelegramSavePath, ...] = field(default_factory=tuple)
+    telegram_token_file: Path = DEFAULT_TELEGRAM_TOKEN_FILE
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -245,6 +269,9 @@ class Settings:
         bearer_token = env("PUSH115_BRIDGE_TOKEN") or load_or_create_token(token_file)
         if len(bearer_token) < 32:
             raise ValueError("PUSH115_BRIDGE_TOKEN 至少需要 32 个字符")
+        telegram_token_file = _safe_path(
+            env("PUSH115_TELEGRAM_TOKEN_FILE"), DEFAULT_TELEGRAM_TOKEN_FILE
+        )
 
         db_path = _safe_path(env("PUSH115_BRIDGE_DB"), DEFAULT_DB_FILE)
         origins = _parse_cors_origins(env("PUSH115_BRIDGE_CORS_ORIGINS"))
@@ -293,11 +320,6 @@ class Settings:
         telegram_save_paths = _parse_telegram_save_paths(
             env("PUSH115_TELEGRAM_SAVE_PATHS")
         )
-        if telegram_polling and (not telegram_token or not allowed_chats):
-            raise ValueError(
-                "启用 Telegram polling 时必须设置 Bot token 和非空 chat allowlist"
-            )
-
         lease_seconds = int(env("PUSH115_BRIDGE_LEASE_SECONDS", "120"))
         if not 15 <= lease_seconds <= 900:
             raise ValueError("租约时间必须在 15 到 900 秒之间")
@@ -349,8 +371,293 @@ class Settings:
                 1, min(100, int(env("PUSH115_NYAA_MAX_RESULTS", "20")))
             ),
             telegram_save_paths=telegram_save_paths,
+            telegram_token_file=telegram_token_file,
         )
 
 
 def require_allowlisted(value: int, allowed: Iterable[int]) -> bool:
     return int(value) in set(allowed)
+
+
+class PairingError(ValueError):
+    """Base class for errors raised while consuming a pairing window."""
+
+
+class PairingWindowClosed(PairingError):
+    """The bridge is already paired or its current window is unavailable."""
+
+
+class PairingCodeInvalid(PairingError):
+    """The supplied code is invalid; the attempt has been counted."""
+
+
+@dataclass(frozen=True)
+class PairingStatus:
+    paired: bool
+    pairing_available: bool
+    expires_at: float | None
+    failures: int
+    max_failures: int = PAIRING_MAX_FAILURES
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "schema": 1,
+            "version": "1.11.0",
+            "paired": self.paired,
+            "pairingAvailable": self.pairing_available,
+            "expiresAt": self.expires_at,
+            "failuresRemaining": max(0, self.max_failures - self.failures),
+        }
+
+
+def normalize_pairing_code(value: str) -> str:
+    """Normalize a human-entered Crockford/Base32 code.
+
+    Display separators and ASCII whitespace are ignored.  Crockford's
+    unambiguous aliases (O/0 and I/L/1) are accepted on input, while generated
+    codes never contain the ambiguous letters.
+    """
+
+    if not isinstance(value, str):
+        raise PairingCodeInvalid("配对码格式无效")
+    compact = "".join(character for character in value.upper() if not character.isspace())
+    compact = compact.replace("-", "").replace("_", "")
+    compact = compact.translate(str.maketrans({"O": "0", "I": "1", "L": "1"}))
+    if len(compact) != PAIRING_CODE_LENGTH or any(
+        character not in PAIRING_CODE_ALPHABET for character in compact
+    ):
+        raise PairingCodeInvalid("配对码格式无效")
+    return compact
+
+
+def _pairing_code_hash(code: str) -> str:
+    return hashlib.sha256(
+        ("115-offline-helper-pairing-v1:" + code).encode("ascii")
+    ).hexdigest()
+
+
+class PairingManager:
+    """Own the one-time local pairing window and the active bearer token.
+
+    ``runtime_store`` is intentionally duck-typed.  The concrete
+    :class:`bridge.db.RuntimeConfigStore` is used by the app, while tests or a
+    future Telegram manager can provide a small compatible store.  The code
+    itself remains in memory only; the SQLite state contains its hash and
+    expiry so a restart cannot accidentally resurrect a consumed code.
+    """
+
+    def __init__(
+        self,
+        runtime_store: object,
+        *,
+        token_file: str | Path | None,
+        initial_token: str,
+        clock: callable = time.time,
+        code_factory: callable | None = None,
+        token_factory: callable | None = None,
+        ttl_seconds: int = PAIRING_CODE_TTL_SECONDS,
+        max_failures: int = PAIRING_MAX_FAILURES,
+    ) -> None:
+        if not initial_token or len(str(initial_token)) < 32:
+            raise ValueError("bearer token 至少需要 32 个字符")
+        if ttl_seconds <= 0 or max_failures <= 0:
+            raise ValueError("配对窗口参数必须为正数")
+        self.runtime_store = runtime_store
+        self.token_file = Path(token_file) if token_file else None
+        self._clock = clock
+        self._code_factory = code_factory or self._generate_code
+        self._token_factory = token_factory or (lambda: secrets.token_urlsafe(32))
+        self.ttl_seconds = int(ttl_seconds)
+        self.max_failures = int(max_failures)
+        self._lock = threading.RLock()
+        self._current_code: str | None = None
+        self._current_token = str(initial_token)
+
+        stored_token = self._get_stored_bearer_token()
+        if stored_token:
+            self._current_token = stored_token
+        state = self._get_pairing_state()
+        if bool(state.get("paired")):
+            self._current_code = None
+            return
+        # A raw code is intentionally not recoverable after process restart.
+        # Opening a fresh window is what lets the CLI print a usable code.
+        self._open_window_locked(now=self._now())
+
+    @staticmethod
+    def _generate_code() -> str:
+        raw = "".join(
+            secrets.choice(PAIRING_CODE_ALPHABET)
+            for _ in range(PAIRING_CODE_LENGTH)
+        )
+        return raw
+
+    def _now(self) -> float:
+        return float(self._clock())
+
+    def _get_stored_bearer_token(self) -> str | None:
+        getter = getattr(self.runtime_store, "get_bearer_token", None)
+        value = getter() if callable(getter) else None
+        return str(value) if value else None
+
+    def _get_pairing_state(self) -> dict[str, object]:
+        getter = getattr(self.runtime_store, "get_pairing_state", None)
+        value = getter() if callable(getter) else None
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    def _save_pairing_state(self, state: Mapping[str, object]) -> None:
+        setter = getattr(self.runtime_store, "set_pairing_state", None)
+        if not callable(setter):
+            raise RuntimeError("runtime store 不支持 pairing state")
+        setter(dict(state))
+
+    @property
+    def current_token(self) -> str:
+        with self._lock:
+            return self._current_token
+
+    @property
+    def bearer_token(self) -> str:
+        return self.current_token
+
+    @property
+    def current_code(self) -> str | None:
+        """Return the display code for the local CLI, never an HTTP payload."""
+
+        with self._lock:
+            self._refresh_expiry_locked(self._now())
+            if self._current_code is None:
+                return None
+            raw = self._current_code
+            return f"{raw[:4]}-{raw[4:]}"
+
+    @property
+    def pairing_code(self) -> str | None:
+        return self.current_code
+
+    def _refresh_expiry_locked(self, now: float) -> dict[str, object]:
+        state = self._get_pairing_state()
+        if bool(state.get("paired")):
+            self._current_code = None
+            return state
+        expires_at = state.get("expiresAt")
+        try:
+            expired = expires_at is not None and now >= float(expires_at)
+        except (TypeError, ValueError):
+            expired = True
+        failures = int(state.get("failures", 0) or 0)
+        if expired or failures >= self.max_failures:
+            self._current_code = None
+            state = {
+                "schema": 1,
+                "paired": False,
+                "codeHash": state.get("codeHash"),
+                "expiresAt": expires_at,
+                "failures": failures,
+                "closed": True,
+            }
+            self._save_pairing_state(state)
+        return state
+
+    def status(self, *, now: float | None = None) -> PairingStatus:
+        with self._lock:
+            state = self._refresh_expiry_locked(self._now() if now is None else float(now))
+            paired = bool(state.get("paired"))
+            failures = int(state.get("failures", 0) or 0)
+            expires_at = state.get("expiresAt")
+            try:
+                expiry = float(expires_at) if expires_at is not None else None
+            except (TypeError, ValueError):
+                expiry = None
+            available = (
+                not paired
+                and self._current_code is not None
+                and failures < self.max_failures
+                and expiry is not None
+                and (self._now() if now is None else float(now)) < expiry
+            )
+            return PairingStatus(
+                paired=paired,
+                pairing_available=available,
+                expires_at=expiry,
+                failures=failures,
+                max_failures=self.max_failures,
+            )
+
+    def open_window(self, *, now: float | None = None, force: bool = False) -> str:
+        """Open a new window for an unpaired bridge and return its display code."""
+
+        with self._lock:
+            state = self._get_pairing_state()
+            if bool(state.get("paired")) and not force:
+                raise PairingWindowClosed("Bridge 已完成配对")
+            self._open_window_locked(now=self._now() if now is None else float(now))
+            return self.current_code or ""
+
+    def _open_window_locked(self, *, now: float) -> None:
+        raw_code = normalize_pairing_code(str(self._code_factory()))
+        self._current_code = raw_code
+        self._save_pairing_state(
+            {
+                "schema": 1,
+                "paired": False,
+                "codeHash": _pairing_code_hash(raw_code),
+                "expiresAt": now + self.ttl_seconds,
+                "failures": 0,
+                "closed": False,
+            }
+        )
+
+    def pair(self, code: str, *, client_id: str = "") -> str:
+        """Consume ``code`` and rotate/persist the bearer token once."""
+
+        with self._lock:
+            now = self._now()
+            state = self._refresh_expiry_locked(now)
+            if bool(state.get("paired")):
+                raise PairingWindowClosed("Bridge 已完成配对")
+            if self._current_code is None or not self.status(now=now).pairing_available:
+                raise PairingWindowClosed("配对窗口已关闭或已过期")
+            try:
+                normalized = normalize_pairing_code(code)
+            except PairingCodeInvalid:
+                normalized = ""
+            expected = str(state.get("codeHash") or "")
+            valid = bool(normalized) and hmac.compare_digest(
+                _pairing_code_hash(normalized), expected
+            )
+            if not valid:
+                failures = int(state.get("failures", 0) or 0) + 1
+                self._save_pairing_state(
+                    {
+                        **state,
+                        "failures": failures,
+                        "closed": failures >= self.max_failures,
+                    }
+                )
+                if failures >= self.max_failures:
+                    self._current_code = None
+                raise PairingCodeInvalid("配对码无效")
+
+            token = str(self._token_factory())
+            if len(token) < 32:
+                raise ValueError("token_factory 返回的 bearer token 过短")
+            persist = getattr(self.runtime_store, "set_bearer_token", None)
+            if callable(persist):
+                persist(token)
+            if self.token_file is not None:
+                persist_secret(self.token_file, token)
+            self._current_token = token
+            safe_client_id = str(client_id or "").strip()[:128]
+            self._save_pairing_state(
+                {
+                    "schema": 1,
+                    "paired": True,
+                    "pairedAt": now,
+                    "pairedClientId": safe_client_id,
+                    "failures": int(state.get("failures", 0) or 0),
+                    "closed": True,
+                }
+            )
+            self._current_code = None
+            return token

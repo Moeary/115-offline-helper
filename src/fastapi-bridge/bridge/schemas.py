@@ -11,6 +11,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StrictInt,
     StrictStr,
     field_validator,
@@ -78,6 +79,94 @@ def _validate_bounded_json(value: Any, *, field_name: str) -> Any:
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class BootstrapStatusResponse(StrictModel):
+    schema_version: Literal[1] = Field(1, alias="schema")
+    paired: StrictBool
+    pairing_available: StrictBool = Field(..., alias="pairingAvailable")
+    expires_at: float | None = Field(None, alias="expiresAt")
+    failures_remaining: StrictInt = Field(..., alias="failuresRemaining", ge=0, le=5)
+
+
+class BootstrapPairRequest(StrictModel):
+    """Unauthenticated local bootstrap request.
+
+    ``pairingCode`` is the canonical name.  ``code`` and ``pairCode`` are
+    accepted as compatibility spellings so a small local client does not need
+    to care which early 1.11 prototype it talks to.
+    """
+
+    schema_version: Literal[1] = Field(1, alias="schema")
+    pairing_code: StrictStr | None = Field(None, alias="pairingCode", max_length=64)
+    code: StrictStr | None = Field(None, max_length=64)
+    pair_code: StrictStr | None = Field(None, alias="pairCode", max_length=64)
+    client_id: StrictStr = Field("local", alias="clientId", max_length=128)
+
+    @field_validator("pairing_code", "code", "pair_code", mode="before")
+    @classmethod
+    def normalize_code_value(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("配对码必须是字符串")
+        return value.strip()
+
+    @field_validator("client_id", mode="before")
+    @classmethod
+    def normalize_client_id(cls, value: Any) -> str:
+        if value is None:
+            return "local"
+        if not isinstance(value, str):
+            raise ValueError("clientId 必须是字符串")
+        return value.strip() or "local"
+
+    @model_validator(mode="after")
+    def validate_code(self) -> "BootstrapPairRequest":
+        supplied = [
+            item
+            for item in (self.pairing_code, self.code, self.pair_code)
+            if item is not None and item != ""
+        ]
+        if not supplied:
+            raise ValueError("必须提供 pairingCode")
+        if any(item != supplied[0] for item in supplied[1:]):
+            raise ValueError("配对码字段内容不一致")
+        return self
+
+    @property
+    def normalized_code(self) -> str:
+        return next(
+            item
+            for item in (self.pairing_code, self.code, self.pair_code)
+            if item is not None and item != ""
+        )
+
+
+class TelegramRuntimeRequest(StrictModel):
+    schema_version: Literal[1] = Field(1, alias="schema")
+    enabled: StrictBool
+    bot_token: StrictStr | None = Field(None, alias="botToken", max_length=512)
+
+    @field_validator("bot_token", mode="before")
+    @classmethod
+    def normalize_bot_token(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("botToken 必须是字符串")
+        value = value.strip()
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+            raise ValueError("botToken 不得包含控制字符")
+        return value
+
+
+class TelegramRuntimeResponse(StrictModel):
+    schema_version: Literal[1] = Field(1, alias="schema")
+    enabled: StrictBool
+    configured: StrictBool
+    bot_username: StrictStr | None = Field(None, alias="botUsername")
+    owner_bound: StrictBool = Field(..., alias="ownerBound")
 
 
 _DIRECTORY_CID = re.compile(r"(?:0|[1-9][0-9]{0,63})\Z")

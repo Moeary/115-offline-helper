@@ -273,6 +273,97 @@ h3 {
 	background: rgba(0, 122, 255, 0.035);
 }
 
+.push115-bridge-onboarding,
+.push115-bridge-telegram {
+	display: grid;
+	gap: 10px;
+	padding: 13px;
+	border: 1px solid rgba(20, 33, 61, 0.1);
+	border-radius: 11px;
+	background: rgba(255, 255, 255, 0.62);
+}
+
+.push115-bridge-section-heading {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.push115-bridge-section-heading h4 {
+	margin: 0;
+	font-size: 13px;
+}
+
+.push115-bridge-section-heading p {
+	max-width: 640px;
+	margin-top: 5px;
+	color: #858992;
+	font-size: 11px;
+	line-height: 1.45;
+}
+
+.push115-bridge-status-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 25px;
+	font-size: 12px;
+}
+
+.push115-status-text {
+	color: #248a3d;
+	font-size: 12px;
+	font-weight: 650;
+	text-align: right;
+}
+
+.push115-bridge-pairing-fields {
+	margin-bottom: 0;
+}
+
+.push115-bridge-pairing-action,
+.push115-telegram-configure-action {
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+}
+
+.push115-telegram-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+}
+
+.push115-telegram-status {
+	display: grid;
+	gap: 4px;
+	padding-top: 4px;
+}
+
+.push115-telegram-claim-link {
+	color: #0066cc;
+	font-size: 12px;
+	font-weight: 650;
+}
+
+.push115-bridge-advanced {
+	padding: 4px 2px;
+	font-size: 12px;
+}
+
+.push115-bridge-advanced summary {
+	padding: 7px 9px;
+	border-radius: 8px;
+	color: #59616c;
+	cursor: pointer;
+}
+
+.push115-bridge-advanced summary:hover {
+	background: rgba(0, 122, 255, 0.06);
+}
+
 .push115-bridge-enabled {
 	margin: 0;
 	min-height: 0;
@@ -635,6 +726,17 @@ body.dark-theme .push115-directory-browser {
 body.dark-theme .push115-bridge-panel {
 	border-color: rgba(80, 160, 255, 0.3);
 	background: rgba(40, 110, 190, 0.11);
+}
+
+body.dark-theme .push115-bridge-onboarding,
+body.dark-theme .push115-bridge-telegram {
+	border-color: rgba(255, 255, 255, 0.11);
+	background: rgba(27, 30, 34, 0.72);
+}
+
+body.dark-theme .push115-bridge-section-heading p,
+body.dark-theme .push115-bridge-advanced summary {
+	color: #a9afb8;
 }
 
 body.dark-theme .push115-toggle small,

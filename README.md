@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.10.1-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.11.0-orange" alt="Version">
 </p>
 
 ---
@@ -138,18 +138,18 @@ pixi run deploy
 
 ### 本地自动任务 Bridge
 
-扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。Bridge 默认关闭；在设置页启用时，浏览器只请求 `http://127.0.0.1/*` 可选权限，传输地址和端口仍固定，Bearer token 只保存在本地设置并由 service worker 使用，不会注入网页或转发 Cookie。Bridge 的 Intent 只接受严格的 BTIH Magnet 或 ED2K file 链接。
+扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。1.11.0 支持零配置引导：启动 Bridge 后，在设置页输入终端显示的一次性配对码即可取得并保存 Bearer token；普通用户无需查 Extension ID、复制 token、填写 chat/user ID 或编辑 `.env`。浏览器只请求固定 loopback 的可选权限，token 由 service worker 使用，不会注入网页或转发 Cookie。Bridge 的 Intent 只接受严格的 BTIH Magnet 或 ED2K file 链接。
 
-设置页可填写 token 和 Bridge 默认 CID；该 CID 只在领取的任务没有指定 `savePathCid` 时使用，任务自带的 CID 会被保留。目录扫描结果会以非敏感的 `schema/revision/path/CID` 快照自动同步到 Bridge SQLite，Telegram `/dir` 动态读取最新快照并按目录树分页浏览，避免把几千个目录一次性生成成按钮；Bridge 尚未收到浏览器快照时会提示先同步目录，旧版 `PUSH115_TELEGRAM_SAVE_PATHS` 仍可作为兼容 fallback。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile`（`/av` 为 `jav`、`/anime` 为 `anime`）和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Telegram 支持 `/dir` 选择动态目录、`/add <Magnet|ED2K>` 直接入队和 `/jobs` 查看任务；详情页可对失败任务重试、对进行中任务取消。取消进行中任务只停止扩展本地任务和监控，不取消 115 云端离线任务；排队中的任务可以直接终止。Bridge 的 `/av` 查询 JavBus，现有 `/anime 关键词` 保持 Nyaa RSS 搜索，本版本没有新增 RSS、订阅或自动搜索能力。Windows 启动、token、Telegram allowlist、目录 registry fallback、Nyaa 来源和 CORS 配置见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
+设置页现在只需在高级配置之外填写 Telegram Bot Token；Bridge 会用 `getMe` 校验、动态启动 polling，并生成 Telegram `/start` 管理员认领链接。认领后只允许该 owner 使用 `/av`、`/anime`、`/add`、`/jobs`、`/dir`；更换 token 会要求重新认领。目录扫描结果会以非敏感的 `schema/revision/path/CID` 快照自动同步到 Bridge SQLite，Telegram `/dir` 动态读取最新快照并按目录树分页浏览；Bridge 尚未收到浏览器快照时会提示先同步目录，旧版 `PUSH115_TELEGRAM_SAVE_PATHS` 仍可作为兼容 fallback。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile`（`/av` 为 `jav`、`/anime` 为 `anime`）和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Telegram 支持 `/dir` 选择动态目录、`/add <Magnet|ED2K>` 直接入队和 `/jobs` 查看任务；详情页可对失败任务重试、对进行中任务取消。取消进行中任务只停止扩展本地任务和监控，不取消 115 云端离线任务；排队中的任务可以直接终止。Bridge 的 `/av` 查询 JavBus，现有 `/anime 关键词` 保持 Nyaa RSS 搜索，本版本没有新增 RSS、订阅或自动搜索能力。高级环境变量见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
 
 在仓库根目录使用 Pixi 启动 Bridge：
 
 ```powershell
 pixi install
-Copy-Item src\fastapi-bridge\.env.example src\fastapi-bridge\.env
-pixi run bridge-token
 pixi run bridge-start
 ```
+
+首次启动时终端会显示 5 分钟内有效的一次性配对码；打开扩展设置页，检查 Bridge 并输入该配对码。浏览器重装后可显式运行 `pixi run bridge-pair` 重新打开配对窗口。高级用户仍可使用 `.env.example` 覆盖 provider、数据库和超时配置。
 
 状态、数据库和 token 默认保存在 `src/fastapi-bridge/.state`；测试使用 `pixi run bridge-test`。
 
@@ -190,7 +190,7 @@ node --test tests/*.test.cjs
 ## 隐私与许可
 
 - 数据通过 `chrome.storage.local` 保存在本地。
-- 不做遥测、广告或用户画像，也不会把 115 Cookie 上传给 Bridge 或 Telegram；若主动启用 Telegram，所选资源和任务状态会发送到配置的允许聊天。
+- 不做遥测、广告或用户画像，也不会把 115 Cookie 上传给 Bridge 或 Telegram；若主动启用 Telegram，所选资源和任务状态只会发送给完成认领的 Telegram owner。
 - 默认仅与 `*.115.com` 通信；启用本地 Bridge 后，另与固定的 `127.0.0.1:52115` 通信。
 - [完整隐私政策](https://gangz1o.github.io/115-offline-helper/privacy-policy.html)
 

@@ -18,6 +18,7 @@ const CONFIG_KEYS = {
 	SITE_PROFILES: 'push115_site_profiles',
 	BRIDGE_ENABLED: 'push115_bridge_enabled',
 	BRIDGE_TOKEN: 'push115_bridge_token',
+	BRIDGE_PAIRED: 'push115_bridge_paired',
 	BRIDGE_TARGET_CID: 'push115_bridge_target_cid',
 }
 const DIRECTORY_INDEX_KEY = 'push115_directory_index'
@@ -39,6 +40,7 @@ const DEFAULT_CONFIG = {
 	[CONFIG_KEYS.CLEAN_NFO]: false,
 	[CONFIG_KEYS.BRIDGE_ENABLED]: false,
 	[CONFIG_KEYS.BRIDGE_TOKEN]: '',
+	[CONFIG_KEYS.BRIDGE_PAIRED]: false,
 	[CONFIG_KEYS.BRIDGE_TARGET_CID]: '0',
 }
 
@@ -107,6 +109,45 @@ const I18N_STRINGS = {
 		bridge_permission_hint: '首次启用会请求 http://127.0.0.1/* 的可选权限。',
 		bridge_permission_denied: '未获得本地 Bridge 权限，Bridge 保持关闭。',
 		bridge_token_required: '启用 Bridge 前请填写 Bearer token。',
+		bridge_pairing_title: '快速配对',
+		bridge_pairing_hint: 'Bridge 启动后会在终端显示一次性配对码；配对成功后，Bearer token 会安全保存在扩展本地。',
+		bridge_refresh_button: '检查 Bridge',
+		bridge_status_label: 'Bridge 状态',
+		bridge_pairing_code_label: '配对码',
+		bridge_pairing_code_placeholder: '例如：K7MP-4Q2D',
+		bridge_pair_button: '配对并启用',
+		bridge_advanced_title: '高级配置（手工 token / 目录）',
+		bridge_status_unavailable: '未发现本地 Bridge',
+		bridge_status_pairing: '等待配对码',
+		bridge_status_paired: '已配对',
+		bridge_status_unpaired: '未配对',
+		bridge_pairing_success: 'Bridge 已配对；正在同步目录。',
+		bridge_pairing_failed: 'Bridge 配对失败：',
+		bridge_pairing_required: '请输入终端显示的配对码。',
+		bridge_sync_pending: '目录将在 Bridge 可用后同步。',
+		telegram_title: 'Telegram Bot',
+		telegram_hint: 'Bot Token 只用于配置本地 Bridge；扩展不会在状态、日志或页面文字中回显它。',
+		telegram_refresh_button: '刷新状态',
+		telegram_token_label: 'Bot Token',
+		telegram_token_hint: '仅在首次配置或更换 Bot 时填写；读取状态不会返回 token。',
+		telegram_connect_button: '连接 Telegram',
+		telegram_start_button: '启动',
+		telegram_stop_button: '停止',
+		telegram_restart_button: '重启',
+		telegram_status_label: 'Telegram 状态',
+		telegram_bot_label: '机器人',
+		telegram_owner_label: '管理员',
+		telegram_status_unavailable: '未配置或 Bridge 未连接',
+		telegram_status_enabled: '运行中',
+		telegram_status_disabled: '已停止',
+		telegram_configured: '已配置',
+		telegram_not_configured: '未配置',
+		telegram_owner_bound: '已绑定',
+		telegram_owner_unbound: '未绑定',
+		telegram_bot_unknown: '未知',
+		telegram_claim_link: '打开 Telegram 绑定管理员',
+		telegram_action_failed: 'Telegram 操作失败：',
+		telegram_action_success: 'Telegram 设置已更新。',
 		save_button: '保存设置',
 		reset_button: '恢复默认',
 		save_success: '设置已保存。',
@@ -202,6 +243,45 @@ const I18N_STRINGS = {
 		bridge_permission_hint: 'Enabling for the first time requests the optional http://127.0.0.1/* permission.',
 		bridge_permission_denied: 'The local Bridge permission was not granted; Bridge remains disabled.',
 		bridge_token_required: 'Enter a Bearer token before enabling Bridge.',
+		bridge_pairing_title: 'Quick pairing',
+		bridge_pairing_hint: 'When Bridge starts, it prints a one-time pairing code in the terminal. After pairing, the Bearer token is stored locally in the extension.',
+		bridge_refresh_button: 'Check Bridge',
+		bridge_status_label: 'Bridge status',
+		bridge_pairing_code_label: 'Pairing code',
+		bridge_pairing_code_placeholder: 'e.g. K7MP-4Q2D',
+		bridge_pair_button: 'Pair and enable',
+		bridge_advanced_title: 'Advanced settings (manual token / directory)',
+		bridge_status_unavailable: 'Local Bridge not found',
+		bridge_status_pairing: 'Waiting for pairing code',
+		bridge_status_paired: 'Paired',
+		bridge_status_unpaired: 'Not paired',
+		bridge_pairing_success: 'Bridge paired; syncing the directory index.',
+		bridge_pairing_failed: 'Bridge pairing failed: ',
+		bridge_pairing_required: 'Enter the pairing code shown in the terminal.',
+		bridge_sync_pending: 'The directory will sync when Bridge is available.',
+		telegram_title: 'Telegram Bot',
+		telegram_hint: 'The Bot Token is used only to configure the local Bridge; the extension never echoes it in status, logs, or page text.',
+		telegram_refresh_button: 'Refresh status',
+		telegram_token_label: 'Bot Token',
+		telegram_token_hint: 'Enter it only for the first setup or when changing bots; status reads never return the token.',
+		telegram_connect_button: 'Connect Telegram',
+		telegram_start_button: 'Start',
+		telegram_stop_button: 'Stop',
+		telegram_restart_button: 'Restart',
+		telegram_status_label: 'Telegram status',
+		telegram_bot_label: 'Bot',
+		telegram_owner_label: 'Owner',
+		telegram_status_unavailable: 'Not configured or Bridge unavailable',
+		telegram_status_enabled: 'Running',
+		telegram_status_disabled: 'Stopped',
+		telegram_configured: 'Configured',
+		telegram_not_configured: 'Not configured',
+		telegram_owner_bound: 'Bound',
+		telegram_owner_unbound: 'Not bound',
+		telegram_bot_unknown: 'Unknown',
+		telegram_claim_link: 'Open Telegram to bind the owner',
+		telegram_action_failed: 'Telegram action failed: ',
+		telegram_action_success: 'Telegram settings updated.',
 		save_button: 'Save settings',
 		reset_button: 'Reset defaults',
 		save_success: 'Settings saved.',
@@ -547,6 +627,192 @@ async function requestBridgePermission(nextConfig) {
 	return granted ? [] : [origin]
 }
 
+async function ensureBridgeHostPermission() {
+	const origin = Push115.Config.BRIDGE_HOST_PERMISSION
+	if (!chrome.permissions?.contains || !chrome.permissions?.request) return true
+	if (await chrome.permissions.contains({ origins: [origin] })) return true
+	if (await chrome.permissions.request({ origins: [origin] })) return true
+	throw new Error(t('bridge_permission_denied'))
+}
+
+function renderBridgeBootstrapStatus(status) {
+	const element = document.getElementById('push115-bridge-bootstrap-status')
+	if (!element) return
+	if (!status) {
+		element.textContent = t('bridge_status_unavailable')
+		return
+	}
+	if (status.paired) {
+		element.textContent = t('bridge_status_paired')
+	} else if (status.pairingAvailable) {
+		element.textContent = t('bridge_status_pairing')
+	} else {
+		element.textContent = t('bridge_status_unpaired')
+	}
+}
+
+function renderTelegramStatus(status) {
+	const statusText = document.getElementById('push115-telegram-status-text')
+	const botName = document.getElementById('push115-telegram-bot-name')
+	const ownerStatus = document.getElementById('push115-telegram-owner-status')
+	const claimLink = document.getElementById('push115-telegram-claim-link')
+	if (!status) {
+		if (statusText) statusText.textContent = t('telegram_status_unavailable')
+		if (botName) botName.textContent = t('telegram_bot_unknown')
+		if (ownerStatus) ownerStatus.textContent = t('telegram_owner_unbound')
+		if (claimLink) {
+			claimLink.hidden = true
+			claimLink.removeAttribute('href')
+		}
+		return
+	}
+	if (statusText) {
+		statusText.textContent = status.enabled
+			? t('telegram_status_enabled')
+			: (status.configured ? t('telegram_status_disabled') : t('telegram_not_configured'))
+	}
+	if (botName) botName.textContent = status.botUsername ? `@${status.botUsername}` : t('telegram_bot_unknown')
+	if (ownerStatus) ownerStatus.textContent = status.ownerBound ? t('telegram_owner_bound') : t('telegram_owner_unbound')
+	if (claimLink) {
+		const url = String(status.ownerClaimUrl || '').trim()
+		claimLink.hidden = !url || status.ownerBound
+		if (url && !claimLink.hidden) claimLink.href = url
+		else claimLink.removeAttribute('href')
+	}
+}
+
+async function refreshTelegramStatus() {
+	const token = String((await chrome.storage.local.get(CONFIG_KEYS.BRIDGE_TOKEN))[CONFIG_KEYS.BRIDGE_TOKEN] || '').trim()
+	if (!token) {
+		renderTelegramStatus(null)
+		return null
+	}
+	try {
+		const status = await Push115.BridgeClient.getTelegramStatus(token)
+		renderTelegramStatus(status)
+		return status
+	} catch (error) {
+		renderTelegramStatus(null)
+		const message = document.getElementById('push115-telegram-status-message')
+		if (message) {
+			message.className = 'push115-status error'
+			message.textContent = t('telegram_action_failed') + (error?.message || error)
+		}
+		return null
+	}
+}
+
+async function refreshBridgeOnboarding(requestPermission = false) {
+	try {
+		if (requestPermission) await ensureBridgeHostPermission()
+		const status = await Push115.BridgeClient.bootstrapStatus()
+		renderBridgeBootstrapStatus(status)
+		await refreshTelegramStatus()
+		return status
+	} catch (error) {
+		renderBridgeBootstrapStatus(null)
+		renderTelegramStatus(null)
+		return null
+	}
+}
+
+async function pairBridgeFromOptions() {
+	const button = document.getElementById('push115-bridge-pair')
+	const status = document.getElementById('push115-bridge-pair-status')
+	const codeInput = document.getElementById('push115-bridge-pairing-code')
+	const code = String(codeInput?.value || '').trim()
+	if (!code) {
+		if (status) {
+			status.className = 'push115-status error'
+			status.textContent = t('bridge_pairing_required')
+		}
+		return
+	}
+	if (button) button.disabled = true
+	try {
+		await ensureBridgeHostPermission()
+		await Push115.BridgeClient.pairBridge(code)
+		const values = await chrome.storage.local.get([CONFIG_KEYS.BRIDGE_TOKEN, CONFIG_KEYS.BRIDGE_ENABLED, CONFIG_KEYS.BRIDGE_PAIRED])
+		configCache = { ...configCache, ...values }
+		fillForm()
+		if (status) {
+			status.className = 'push115-status success'
+			status.textContent = t('bridge_pairing_success')
+		}
+		renderBridgeBootstrapStatus({ paired: true, pairingAvailable: false })
+		await refreshTelegramStatus()
+	} catch (error) {
+		if (status) {
+			status.className = 'push115-status error'
+			status.textContent = t('bridge_pairing_failed') + (error?.message || error)
+		}
+	} finally {
+		if (button) button.disabled = false
+	}
+}
+
+async function updateTelegramFromOptions(action, details = {}) {
+	const button = document.getElementById(`push115-telegram-${action}`)
+	const message = document.getElementById('push115-telegram-status-message')
+	if (button) button.disabled = true
+	try {
+		const clientAction = Push115.BridgeClient[action + 'Telegram']
+		if (typeof clientAction !== 'function') throw new Error(t('telegram_action_failed') + action)
+		// start/stop/restart use the already validated token stored by Bridge.
+		// Passing the wrapper's default `{}` as the first positional argument
+		// would otherwise turn it into a literal Bot Token or Bearer token.
+		const status = action === 'configure'
+			? await clientAction(details)
+			: await clientAction()
+		renderTelegramStatus(status)
+		if (message) {
+			message.className = 'push115-status success'
+			message.textContent = t('telegram_action_success')
+		}
+		return status
+	} catch (error) {
+		if (message) {
+			message.className = 'push115-status error'
+			message.textContent = t('telegram_action_failed') + (error?.message || error)
+		}
+		return null
+	} finally {
+		if (button) button.disabled = false
+	}
+}
+
+async function configureTelegramFromOptions() {
+	const input = document.getElementById('push115-telegram-token')
+	const token = String(input?.value || '').trim()
+	if (!token) {
+		const message = document.getElementById('push115-telegram-status-message')
+		if (message) {
+			message.className = 'push115-status error'
+			message.textContent = t('telegram_token_hint')
+		}
+		return
+	}
+	const button = document.getElementById('push115-telegram-configure')
+	const message = document.getElementById('push115-telegram-status-message')
+	if (button) button.disabled = true
+	try {
+		const status = await Push115.BridgeClient.configureTelegram({ enabled: true, botToken: token })
+		if (input) input.value = ''
+		renderTelegramStatus(status)
+		if (message) {
+			message.className = 'push115-status success'
+			message.textContent = t('telegram_action_success')
+		}
+	} catch (error) {
+		if (message) {
+			message.className = 'push115-status error'
+			message.textContent = t('telegram_action_failed') + (error?.message || error)
+		}
+	} finally {
+		if (button) button.disabled = false
+	}
+}
+
 async function saveSettings(event) {
 	event.preventDefault()
 	const button = document.getElementById('push115-save-settings')
@@ -599,6 +865,13 @@ async function resetSettings() {
 function bindEvents() {
 	document.getElementById('push115-settings-form').addEventListener('submit', saveSettings)
 	document.getElementById('push115-reset-settings').addEventListener('click', resetSettings)
+	document.getElementById('push115-bridge-refresh')?.addEventListener('click', () => void refreshBridgeOnboarding(true))
+	document.getElementById('push115-bridge-pair')?.addEventListener('click', () => void pairBridgeFromOptions())
+	document.getElementById('push115-telegram-refresh')?.addEventListener('click', () => void refreshTelegramStatus())
+	document.getElementById('push115-telegram-configure')?.addEventListener('click', () => void configureTelegramFromOptions())
+	document.getElementById('push115-telegram-start')?.addEventListener('click', () => void updateTelegramFromOptions('start'))
+	document.getElementById('push115-telegram-stop')?.addEventListener('click', () => void updateTelegramFromOptions('stop'))
+	document.getElementById('push115-telegram-restart')?.addEventListener('click', () => void updateTelegramFromOptions('restart'))
 	document.getElementById('push115-save-dirs-input').addEventListener('change', () => renderSavePathSelectors(true))
 	document.getElementById('push115-scan-directories').addEventListener('click', () => void scanDirectories())
 	document.getElementById('push115-refresh-logs').addEventListener('click', Push115.OptionsTasks.refresh)
@@ -648,6 +921,7 @@ async function init() {
 	applyLocale()
 	fillForm()
 	bindEvents()
+	void refreshBridgeOnboarding(false)
 	await refreshDirectoryIndex()
 	await Push115.OptionsTasks.refresh()
 	setInterval(Push115.OptionsTasks.refresh, 5000)
