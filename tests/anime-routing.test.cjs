@@ -498,6 +498,42 @@ test('direct JAV ED2K result uses a pre-submit snapshot and only moves the uniqu
 	assert.equal(destination.items.find(item => item.fid === fresh.fid)?.n, 'MNGS-060.mp4')
 })
 
+test('South Plus ED2K accepts a normalized 115 filename while retaining the extracted code', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const targetCid = '10'
+	const sourceName = String.raw`www\.98T.la@ SSIS-561 お酒に酔った巨乳女上司とまさかの相部屋 AM000酔った先輩は童貞の僕でも押せばヤレそうです 小宵こなん _restored.mp4`
+	const normalizedName = 'www.98T.la@ SSIS-561 お酒に酔った巨乳女上司とまさかの相部屋 AM000酔った先輩は童貞の僕でも押せばヤレそうです 小宵こなん _restored.mp4'
+	const fresh = e.file(targetCid, normalizedName, 'southplus-ssis-561')
+	fresh.s = 52703754292
+	const task = {
+		taskId: 'southplus-ssis-561', status: 'waiting', sourceSite: 'southplus', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k', code: 'SSIS-561',
+		remoteId: 'southplus-remote', savePathCid: targetCid, expectedName: sourceName, expectedSize: fresh.s,
+		beforeSnapshot: { cid: targetCid, items: [] }, metadata: { pageCode: 'SSIS-561', linkType: 'ed2k' }, createdAt: Date.now(),
+	}
+	e.context.remoteTasks = [{ info_hash: task.remoteId, name: sourceName, status: 2 }]
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.equal(task.code, 'SSIS-561')
+	const destination = e.tree.get([...e.tree.keys()].find(cid => cid !== targetCid && e.tree.get(cid).name === 'SSIS-561'))
+	assert.ok(destination)
+	assert.equal(destination.items.find(item => item.fid === fresh.fid)?.n, 'SSIS-561.mp4')
+})
+
+test('South Plus ED2K waits for a unique file instead of falling back to a task-directory scan', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const task = {
+		taskId: 'southplus-wait-direct', status: 'waiting', sourceSite: 'southplus', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k', code: 'SSIS-561',
+		remoteId: 'southplus-wait-remote', savePathCid: '10', expectedName: 'SSIS-561 restored.mp4', expectedSize: 123,
+		metadata: { pageCode: 'SSIS-561', linkType: 'ed2k' }, createdAt: Date.now(),
+	}
+	e.context.remoteTasks = [{ info_hash: task.remoteId, name: task.expectedName, status: 2 }]
+	await assert.rejects(e.bg.TaskMonitor.processTask(task), /尚未唯一确认下载产物/)
+	assert.equal(e.calls.create.length, 0)
+	assert.equal(e.calls.move.length, 0)
+})
+
 test('direct JAV plan resumes from the recorded destination when a move checkpoint was missed', async () => {
 	const e = environment()
 	const target = await prepare(e)

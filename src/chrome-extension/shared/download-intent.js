@@ -17,6 +17,29 @@
 		try { return decodeURIComponent(String(value || '')) } catch (error) { return String(value || '') }
 	}
 
+	// 115 may normalize a downloaded name slightly (for example, remove the
+	// escape slash in `www\\.98T.la@ ...` or collapse repeated whitespace). Keep
+	// this comparison-only normalization separate from the name we submit or
+	// display; the original ED2K name remains the authoritative expected name.
+	function normalizeDownloadName(value) {
+		let text = decodeEd2kFileName(value)
+		try { text = text.normalize('NFKC') } catch (error) { /* older engines */ }
+		return text
+			.replace(/[\u200b-\u200f\u2060\ufeff]/g, '')
+			.replace(/\\/g, '')
+			.replace(/\s+/g, ' ')
+			.trim()
+			.toLowerCase()
+	}
+
+	function downloadNamesMatch(left, right) {
+		const a = normalizeDownloadName(left)
+		const b = normalizeDownloadName(right)
+		if (!a || !b) return false
+		if (a === b) return true
+		return a.replace(/[\s._-]+/g, '') === b.replace(/[\s._-]+/g, '')
+	}
+
 	function parseExpectedSize(value) {
 		const text = String(value ?? '').replace(/\s+/g, '').trim()
 		if (!/^\d+$/.test(text)) return ''
@@ -225,7 +248,7 @@
 
 	global.Push115 = global.Push115 || {}
 	global.Push115.DownloadIntent = {
-		MEDIA_TYPES, CODE_INVALID_PREFIXES, normalizeCode, extractVideoCode, parseEd2k, parseDownloadLink,
+		MEDIA_TYPES, CODE_INVALID_PREFIXES, normalizeCode, extractVideoCode, normalizeDownloadName, downloadNamesMatch, parseEd2k, parseDownloadLink,
 		extractBtih, extractDisplayName, isDownloadUrl, dedupeKey, parseLines, create,
 	}
 })(typeof globalThis !== 'undefined' ? globalThis : self)

@@ -43,7 +43,21 @@
 		if (!item?.sha) return false
 		const expected = directExpected(task)
 		const plannedName = String(task?.directPlan?.targetName || '').trim()
-		if (expected.name && getItemName(item) !== expected.name && getItemName(item) !== plannedName) return false
+		const namesMatch = !expected.name
+			|| intentApi.downloadNamesMatch?.(getItemName(item), expected.name)
+			|| (plannedName && intentApi.downloadNamesMatch?.(getItemName(item), plannedName))
+		if (expected.name && !namesMatch) {
+			const expectedCode = intentApi.normalizeCode(task?.metadata?.pageCode)
+				|| intentApi.normalizeCode(task?.code)
+				|| intentApi.extractVideoCode?.(expected.name)
+			const actualCode = intentApi.extractVideoCode?.(getItemName(item))
+			const actualSize = rulesApi.getSizeBytes(item)
+			const actualHash = String(item?.hash || item?.ed2kHash || item?.file_hash || item?.content_hash || '').trim().toLowerCase()
+			const sameHash = Boolean(expected.hash && actualHash && actualHash === expected.hash)
+			const sameCodeAndSize = Boolean(expectedCode && actualCode && expectedCode === actualCode
+				&& expected.size > 0 && actualSize === expected.size)
+			if (!sameHash && !sameCodeAndSize) return false
+		}
 		if (expected.size > 0 && rulesApi.getSizeBytes(item) !== expected.size) return false
 		if (expected.hash) {
 			const actual = String(item?.hash || item?.ed2kHash || item?.file_hash || item?.content_hash || '').trim().toLowerCase()

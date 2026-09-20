@@ -68,6 +68,7 @@ test('attached ED2K samples preserve FC2 and compact SNOS catalogue codes', () =
 		{ name: 'MIDA-190 4K60fps.mp4', code: 'MIDA-190' },
 		{ name: 'FC2-PPV-123456 1080p.mp4', code: 'FC2-PPV-123456' },
 		{ name: 'SNOS00301_sample.mkv', code: 'SNOS-00301' },
+		{ name: String.raw`www\.98T.la@ SSIS-561 お酒に酔った巨乳女上司とまさかの相部屋 AM000酔った先輩は童貞の僕でも押せばヤレそうです 小宵こなん _restored.mp4`, code: 'SSIS-561' },
 	]
 	for (const sample of samples) {
 		const parsed = intent.parseEd2k(ed2k(encodeURIComponent(sample.name)))
@@ -77,6 +78,7 @@ test('attached ED2K samples preserve FC2 and compact SNOS catalogue codes', () =
 	}
 	assert.equal(intent.normalizeCode('FC2 PPV 123456'), 'FC2-PPV-123456')
 	assert.equal(intent.normalizeCode('FC2123456'), 'FC2-123456')
+	assert.equal(intent.downloadNamesMatch('www.98T.la@ SSIS-561 sample.mp4', String.raw`www\.98T.la@  SSIS-561 sample.mp4`), true)
 })
 
 test('code extraction skips blacklist prefixes and continues to a later real code', () => {

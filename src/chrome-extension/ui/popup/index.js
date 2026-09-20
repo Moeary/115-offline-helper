@@ -76,6 +76,7 @@ const I18N_STRINGS = {
 		task_logs: '处理日志',
 		open_options: '打开高级设置',
 		open_options_hint: '在完整设置页管理扩展名规则、清理开关和目录。',
+		footer_note: '设置、完整日志与规则',
 		task_status_waiting: '等待 115 任务',
 		task_status_processing: '处理中',
 		task_status_recorded: '已记录',
@@ -133,6 +134,7 @@ const I18N_STRINGS = {
 		task_logs: 'Processing log',
 		open_options: 'Open advanced settings',
 		open_options_hint: 'Manage extension rules, cleanup switches, and directories in the full settings page.',
+		footer_note: 'Settings, full logs, and rules',
 		task_status_waiting: 'Waiting for 115',
 		task_status_processing: 'Processing',
 		task_status_recorded: 'Recorded',
@@ -289,7 +291,7 @@ function renderTaskList(tasks = []) {
 	if (!listEl) return
 
 	listEl.textContent = ''
-	const visibleTasks = getSortedTasks(tasks).slice(0, 8)
+	const visibleTasks = getSortedTasks(tasks).slice(0, 3)
 	if (visibleTasks.length === 0) {
 		const empty = document.createElement('div')
 		empty.className = 'push115-task-empty'
@@ -451,9 +453,10 @@ function applyLocale() {
 	setText('label-task-manager', t('tab_tasks'))
 	setText('hint-task-manager', t('manage_tasks_hint'))
 	setText('push115-refresh-tasks', t('refresh_tasks'))
-	setText('push115-open-options', t('open_options'))
+	setText('push115-open-options-label', t('open_options'))
 	setText('hint-open-options', t('open_options_hint'))
 	setText('push115-open-options-from-tasks', t('open_options'))
+	setText('push115-footer-note', t('footer_note'))
 	setText('hint-options-from-tasks', t('open_options_hint'))
 	setText('push115-language-label', t('settings_language_label'))
 	setText('push115-theme-label', t('settings_theme_label'))

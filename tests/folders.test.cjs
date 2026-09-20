@@ -63,3 +63,18 @@ test('root reads remain safe when the API omits a breadcrumb', async () => {
 	const result = await e.api.read('0')
 	assert.deepEqual(JSON.parse(JSON.stringify(result.path)), [{ cid: '0', n: '根目录' }])
 })
+
+test('folder reads retry a transient 115 response without accepting a wrong directory', async () => {
+	let attempts = 0
+	const e = environment(() => {
+		attempts += 1
+		if (attempts < 3) return { state: 0, path: [{ cid: '0', n: '根目录' }], data: [] }
+		return { state: 1, path: [{ cid: '0', n: '根目录' }, { cid: '7', n: '媒体' }], data: [] }
+	})
+	const result = await e.api.read('7')
+	assert.equal(result.items.length, 0)
+	assert.equal(attempts, 3)
+	assert.deepEqual(JSON.parse(JSON.stringify(result.path)), [{ cid: '0', n: '根目录' }, { cid: '7', n: '媒体' }])
+	assert.equal(e.api.READ_RETRY_POLICY.attempts, 3)
+	assert.equal(e.api.READ_RETRY_POLICY.backoffMs, 250)
+})

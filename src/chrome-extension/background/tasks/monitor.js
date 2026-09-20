@@ -74,6 +74,13 @@
 		return String(task?.file_id || task?.fileId || task?.dir_id || task?.dirId || task?.cid || '').trim()
 	}
 
+	function isSouthPlusDirectEd2k(task, profile) {
+		if (profile !== 'jav') return false
+		const source = String(task?.sourceSite || task?.source || '').trim().toLowerCase()
+		const linkType = String(task?.linkType || task?.metadata?.linkType || '').trim().toLowerCase()
+		return source === 'southplus' && linkType === 'ed2k'
+	}
+
 	function remoteTaskSize(task) {
 		const value = task?.size ?? task?.file_size ?? task?.fileSize ?? task?.total_size ?? task?.totalSize ?? task?.length
 		const parsed = Number(String(value ?? '').replace(/\s+/g, '').trim())
@@ -325,6 +332,9 @@
 			await completeDirectFile(task, direct, config, profile)
 			return
 		}
+		if (isSouthPlusDirectEd2k(task, profile)) {
+			throw new Error('South Plus 单文件 ED2K 尚未唯一确认下载产物，保留任务等待重试')
+		}
 
 		if (forcedMonitoring && !processorNeedsWork(profile, config, task)) {
 			if (!await taskStillActive(task)) return
@@ -413,7 +423,20 @@
 		if (!item?.sha) return false
 		const expected = expectedValues(task)
 		const plannedName = String(task?.directPlan?.targetName || '').trim()
-		if (expected.name && itemName(item) !== expected.name && itemName(item) !== plannedName) return false
+		const namesMatch = !expected.name
+			|| global.Push115.DownloadIntent.downloadNamesMatch?.(itemName(item), expected.name)
+			|| (plannedName && global.Push115.DownloadIntent.downloadNamesMatch?.(itemName(item), plannedName))
+		if (expected.name && !namesMatch) {
+			const expectedCode = global.Push115.DownloadIntent.normalizeCode(task?.metadata?.pageCode)
+				|| global.Push115.DownloadIntent.normalizeCode(task?.code)
+				|| global.Push115.DownloadIntent.extractVideoCode?.(expected.name)
+			const actualCode = global.Push115.DownloadIntent.extractVideoCode?.(itemName(item))
+			const actualHash = itemHash(item)
+			const sameHash = Boolean(expected.hash && actualHash && actualHash === expected.hash)
+			const sameCodeAndSize = Boolean(expectedCode && actualCode && expectedCode === actualCode
+				&& expected.size > 0 && itemSize(item) === expected.size)
+			if (!sameHash && !sameCodeAndSize) return false
+		}
 		if (expected.size > 0 && itemSize(item) !== expected.size) return false
 		if (expected.hash) {
 			const actual = itemHash(item)

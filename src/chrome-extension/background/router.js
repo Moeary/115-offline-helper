@@ -36,11 +36,20 @@
 		const folders = background.Folders
 		if (!folders?.read) return null
 		const cid = String(intent.savePathCid || '0').trim()
-		const listing = await folders.read(cid)
-		return {
-			cid,
-			capturedAt: Date.now(),
-			items: (Array.isArray(listing?.items) ? listing.items : []).map(snapshotItem),
+		try {
+			const listing = await folders.read(cid)
+			return {
+				cid,
+				capturedAt: Date.now(),
+				items: (Array.isArray(listing?.items) ? listing.items : []).map(snapshotItem),
+			}
+		} catch (error) {
+			// Snapshot capture protects the no-FID fallback, but it must not turn a
+			// temporary directory read failure into a lost 115 submission. The task
+			// is still safe: the monitor will require an explicit remote FID or a
+			// later unique post-submit identity before it mutates any file.
+			console.warn('[BG] 提交前目录快照暂不可用，继续提交并等待明确文件身份:', cid, error?.message || error)
+			return null
 		}
 	}
 

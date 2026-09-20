@@ -17,7 +17,7 @@
 					</div>
 				</div>
 				<div class="push115-header-btns">
-					<button class="push115-header-btn" id="push115-open-options" type="button" title="打开高级设置">⚙</button>
+					<button class="push115-header-btn" id="push115-open-options" type="button" title="打开高级设置" aria-label="打开高级设置"><span aria-hidden="true">⚙</span><span class="push115-visually-hidden" id="push115-open-options-label">打开高级设置</span></button>
 					<a class="push115-header-btn" href="https://github.com/gangz1o/sehuatang-to-115" target="_blank" rel="noopener noreferrer" title="Github">
 						<svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
 					</a>
@@ -40,18 +40,22 @@
 					<div id="push115-task-list" class="push115-task-list"></div>
 				</section>
 
-				<section class="push115-card push115-quick-card">
-					<div class="push115-section-heading"><div><h2 id="push115-quick-options-title">快速选项</h2><p id="push115-quick-options-hint">常用选项即时保存；更多规则请打开高级设置。</p></div><button class="push115-link-btn" id="push115-open-options-from-tasks" type="button">高级设置</button></div>
-					<div class="push115-section"><label class="push115-label" id="label-save-path" for="push115-save-dir-select">默认保存目录</label><select id="push115-save-dir-select" class="push115-select"></select><div class="push115-hint" id="hint-cid">目录列表可在高级设置中维护。</div></div>
-					<div class="push115-quick-grid">
-						<label class="push115-toggle-card"><input type="checkbox" class="push115-checkbox" id="push115-auto-delete" /><span><strong id="label-auto-delete">安全清理垃圾</strong><small id="hint-safe-cleanup">仅处理明确安全的候选文件</small></span></label>
-						<label class="push115-toggle-card"><input type="checkbox" class="push115-checkbox" id="push115-auto-organize" /><span><strong id="label-auto-organize">自动整理视频</strong><small id="hint-organize">按页面番号整理任务文件</small></span></label>
+				<details class="push115-card push115-quick-card">
+					<summary><span id="push115-quick-options-title">快速选项</span></summary>
+					<div class="push115-quick-body">
+						<p class="push115-quick-hint" id="push115-quick-options-hint">常用选项即时保存；更多规则请打开高级设置。</p>
+						<div class="push115-section"><label class="push115-label" id="label-save-path" for="push115-save-dir-select">默认保存目录</label><select id="push115-save-dir-select" class="push115-select"></select><div class="push115-hint" id="hint-cid">目录列表可在高级设置中维护。</div></div>
+						<div class="push115-quick-grid">
+							<label class="push115-toggle-card"><input type="checkbox" class="push115-checkbox" id="push115-auto-delete" /><span><strong id="label-auto-delete">安全清理垃圾</strong><small id="hint-safe-cleanup">仅处理明确安全的候选文件</small></span></label>
+							<label class="push115-toggle-card"><input type="checkbox" class="push115-checkbox" id="push115-auto-organize" /><span><strong id="label-auto-organize">自动整理视频</strong><small id="hint-organize">按页面番号整理任务文件</small></span></label>
+						</div>
+						<div class="push115-section push115-delete-inline" id="push115-delete-section" style="display:none"><div class="push115-row"><span id="label-delete-pre">删除小于</span><input type="number" class="push115-input" id="push115-delete-size" min="1" value="100" /><span id="label-delete-post">MB 的文件</span></div><div class="push115-hint" id="hint-delete-safe">字幕和主视频会被保护。</div></div>
+						<div class="push115-quick-grid push115-quick-grid-bottom"><button class="push115-btn push115-btn-secondary" id="push115-check-login" type="button"><img src="icons/check.png" width="16" height="16" alt="" />检查状态</button><button class="push115-btn push115-btn-secondary" id="push115-login-btn" type="button"><img src="icons/115.png" width="16" height="16" alt="" />扫码登录</button></div>
 					</div>
-					<div class="push115-section push115-delete-inline" id="push115-delete-section" style="display:none"><div class="push115-row"><span id="label-delete-pre">删除小于</span><input type="number" class="push115-input" id="push115-delete-size" min="1" value="100" /><span id="label-delete-post">MB 的文件</span></div><div class="push115-hint" id="hint-delete-safe">字幕和主视频会被保护。</div></div>
-					<div class="push115-quick-grid push115-quick-grid-bottom"><button class="push115-btn push115-btn-secondary" id="push115-check-login" type="button"><img src="icons/check.png" width="16" height="16" alt="" />检查状态</button><button class="push115-btn push115-btn-secondary" id="push115-login-btn" type="button"><img src="icons/115.png" width="16" height="16" alt="" />扫码登录</button></div>
-				</section>
+				</details>
 
 				<details class="push115-popup-preferences"><summary id="push115-preferences-title">界面偏好</summary><div class="push115-quick-grid"><label class="push115-field"><span id="push115-language-label">语言 / Language</span><select id="push115-language-select" class="push115-select"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label><label class="push115-field"><span id="push115-theme-label">主题 / Theme</span><select id="push115-theme-select" class="push115-select"><option id="push115-theme-option-auto" value="auto">跟随系统</option><option id="push115-theme-option-light" value="light">浅色</option><option id="push115-theme-option-dark" value="dark">深色</option></select></label></div><label class="push115-checkbox-line"><input type="checkbox" class="push115-checkbox" id="push115-auto-detect" /><span><strong id="label-auto-detect">自动识别链接</strong><small id="hint-auto-detect">在网页上自动检测 magnet/ed2k（需要权限）</small></span></label></details>
+				<div class="push115-footer"><button class="push115-footer-link" id="push115-open-options-from-tasks" type="button">打开高级设置</button><span class="push115-footer-note" id="push115-footer-note">设置、完整日志与规则</span></div>
 			</main>
 		</div>
 

@@ -8,6 +8,8 @@
 	const nameOf = item => String(item?.n || item?.name || item?.file_name || '')
 	const pathCidOf = item => String(item?.cid || item?.id || item?.folder_id || item?.fid || item?.file_id || item?.fileId || item?.pid || item?.parent_cid || '')
 	const PAGE_SIZE = 500
+	const READ_RETRY_ATTEMPTS = 3
+	const READ_RETRY_BACKOFF_MS = 250
 
 	function responseItems(result) {
 		if (Array.isArray(result?.data)) return result.data
@@ -36,9 +38,7 @@
 	// The /files endpoint can return a different directory for an invalid CID.
 	// Require the returned breadcrumb to identify the requested folder before
 	// using a listing to move files or infer that a folder is empty.
-	async function read(cid) {
-		cid = String(cid)
-		if (!/^\d+$/.test(cid)) throw new Error('无效的整理目录 CID')
+	async function readOnce(cid) {
 		const items = []
 		const seen = new Set()
 		let path = []
@@ -76,9 +76,37 @@
 		throw new Error('目录过大，暂缓自动整理')
 	}
 
+	// A transient 115 response can contain a false state, an incomplete
+	// breadcrumb, or the root listing for a short period. Retry only the
+	// validated read; never substitute the returned root or scan the library.
+	async function read(cid) {
+		const value = String(cid)
+		if (!/^\d+$/.test(value)) throw new Error('无效的整理目录 CID')
+		let lastError
+		for (let attempt = 1; attempt <= READ_RETRY_ATTEMPTS; attempt += 1) {
+			try {
+				return await readOnce(value)
+			} catch (error) {
+				lastError = error
+				if (attempt < READ_RETRY_ATTEMPTS) {
+					await new Promise(resolve => setTimeout(resolve, READ_RETRY_BACKOFF_MS * attempt))
+				}
+			}
+		}
+		throw lastError || new Error(`无法读取目录 ${value}`)
+	}
+
 	async function child(parentCid, cid) {
 		return (await read(parentCid)).items.find(item => isFolder(item) && cidOf(item) === String(cid))
 	}
 
-	background.Folders = { read, child, cidOf, isFolder, nameOf, pathCidOf }
+	background.Folders = {
+		read,
+		child,
+		cidOf,
+		isFolder,
+		nameOf,
+		pathCidOf,
+		READ_RETRY_POLICY: Object.freeze({ attempts: READ_RETRY_ATTEMPTS, backoffMs: READ_RETRY_BACKOFF_MS }),
+	}
 })(globalThis)
