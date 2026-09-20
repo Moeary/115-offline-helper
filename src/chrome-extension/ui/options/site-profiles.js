@@ -74,9 +74,14 @@
 				option.selected = item.cid === cidOptions.cid
 				cid.appendChild(option)
 			}
+			const directoryLabel = siteId === 'javbus'
+				? '默认保存目录（建议 AV）'
+				: ['nyaa', 'mikan', 'sukebei'].includes(siteId)
+					? '默认保存目录（建议番剧）'
+					: '默认 115 保存目录'
 			card.append(
 				heading,
-				field('默认 115 保存目录', cid),
+				field(directoryLabel, cid),
 				field('默认处理规则', select('defaultProcessorProfile', processorOptions, profile.defaultProcessorProfile)),
 				checkboxField(siteId === 'southplus' ? '显示资源列表中的“发送到115”按钮' : '显示行内“发送到115”', 'inlineSendButton', profile.inlineSendButton !== false),
 			)

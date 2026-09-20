@@ -40,6 +40,7 @@ from .schemas import (
     ClaimRequest,
     BootstrapPairRequest,
     DirectoryRegistryRequest,
+    dump_directory_registry,
     EventRequest,
     TelegramRuntimeRequest,
 )
@@ -255,7 +256,7 @@ def create_app(
 
     app = FastAPI(
         title="115 Offline Helper Bridge",
-        version="1.11.0",
+        version="1.14.0",
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,
@@ -408,7 +409,9 @@ def create_app(
         payload: DirectoryRegistryRequest,
         _auth: None = Depends(require_auth),
     ) -> dict[str, Any]:
-        incoming = payload.model_dump(by_alias=True)
+        # Keep legacy snapshots byte-compatible when no site profile was
+        # uploaded; newer extensions include the optional siteDefaults map.
+        incoming = dump_directory_registry(payload)
         getter = getattr(queue, "get_directory_registry", None)
         current = getter() if callable(getter) else None
         current_revision = _directory_registry_revision(current)

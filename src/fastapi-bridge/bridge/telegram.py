@@ -751,14 +751,63 @@ class TelegramService:
         path_map = dict(self._path_options())
         return path_map.get(value, f"CID {value or '?'}")
 
+    @staticmethod
+    def _site_default(
+        registry: Mapping[str, Any] | None,
+        source_site: object,
+    ) -> dict[str, Any] | None:
+        """Return a validated-looking site default from the browser snapshot.
+
+        The Bridge has already validated the registry schema before it reaches
+        Telegram.  This second small guard keeps compatibility with in-memory
+        test stores and older snapshots while ensuring a malformed profile can
+        never choose an arbitrary CID or processor.
+        """
+
+        if not isinstance(registry, Mapping):
+            return None
+        site_id = str(source_site or "").strip().lower()
+        if not site_id:
+            return None
+        raw_defaults = registry.get("siteDefaults", registry.get("site_defaults"))
+        if not isinstance(raw_defaults, Mapping):
+            return None
+        raw = raw_defaults.get(site_id)
+        if not isinstance(raw, Mapping) or raw.get("enabled") is not True:
+            return None
+        raw_cid = raw.get(
+            "savePathCid",
+            raw.get("save_path_cid", raw.get("defaultSavePathCid", "0")),
+        )
+        cid = str(raw_cid or "").strip()
+        processor = str(
+            raw.get("processorProfile", raw.get("processor_profile", "generic"))
+            or "generic"
+        ).strip().lower()
+        if not _TELEGRAM_SAVE_PATH_CID.fullmatch(cid):
+            return None
+        if processor not in {"generic", "jav", "anime"}:
+            return None
+        return {
+            "enabled": True,
+            "savePathCid": cid,
+            "processorProfile": processor,
+        }
+
     def _preferred_save_path(
         self,
         chat_id: int,
         user_id: int,
         *,
+        source_site: str | None = None,
         allow_legacy_root: bool = True,
     ) -> tuple[str | None, bool]:
-        """Return the current directory and whether it was user-selected."""
+        """Return the current directory and whether it was user-selected.
+
+        An explicit Telegram ``/dir`` selection wins.  Otherwise a matching
+        enabled browser site profile supplies the default CID, then the first
+        synced directory remains the generic fallback.
+        """
 
         options = self._path_options()
         registry = self._latest_directory_registry()
@@ -772,6 +821,16 @@ class TelegramService:
                 preference = None
         if preference and preference in dict(options):
             return preference, True
+        site_default = self._site_default(registry, source_site)
+        if site_default:
+            site_cid = site_default["savePathCid"]
+            # A non-root CID explicitly configured in the extension is a
+            # deliberate fallback even when that folder was not included in
+            # the last browser scan.  Root still requires a non-empty synced
+            # registry, so an empty/stale snapshot cannot silently reintroduce
+            # the old root fallback.
+            if site_cid in dict(options) or (site_cid != "0" and registry is not None):
+                return site_cid, False
         if options:
             return options[0][0], False
         # Keep the old in-process root default for callers that predate the
@@ -1092,6 +1151,8 @@ class TelegramService:
             },
             "savePathCid": save_path_cid,
         }
+        if code:
+            raw_intent["metadata"]["pageCode"] = code
         if is_anime:
             raw_intent["metadata"].update(
                 {
@@ -1409,7 +1470,7 @@ class TelegramService:
         if chat_id is None or user_id is None:
             return {"handled": True, "error": "invalid_message"}
         save_path_cid, _remembered = self._preferred_save_path(
-            chat_id, user_id, allow_legacy_root=False
+            chat_id, user_id, source_site="telegram", allow_legacy_root=False
         )
         if not save_path_cid:
             await self.transport.send_message(chat_id, self._directory_text(chat_id, user_id))
@@ -1576,6 +1637,9 @@ class TelegramService:
             return {"handled": True, "error": "provider_error"}
         actual_code, title, page_url, cover_url, candidates = self._metadata_details(metadata)
         actual_code = normalize_exact_code(actual_code) or code
+        if not candidates:
+            await self.transport.send_message(chat_id, "JavBus 未找到可用磁力，请稍后重试或检查该番号。")
+            return {"handled": True, "kind": "av", "code": actual_code, "candidateCount": 0}
         result = await self._send_result_for_user(
             chat_id,
             user_id,
@@ -1584,6 +1648,10 @@ class TelegramService:
             page_url=page_url,
             cover_url=cover_url,
             candidates=candidates,
+            source_site="javbus",
+            media_type="jav",
+            processor_profile="jav",
+            provider_name="javbus",
         )
         return {
             "handled": True,
@@ -1648,10 +1716,18 @@ class TelegramService:
                 await self._answer(callback_id, text="按钮已失效")
                 return {"handled": True, "error": "invalid_callback"}
             raw_intent = dict(_as_mapping(payload.get("intent")))
-            save_path_cid, _remembered = self._preferred_save_path(chat_id, user_id)
+            source_site = str(raw_intent.get("sourceSite") or "").strip().lower()
+            save_path_cid, _remembered = self._preferred_save_path(
+                chat_id, user_id, source_site=source_site
+            )
             if not save_path_cid:
                 await self._answer(callback_id, text="浏览器尚未同步 115 目录")
                 return {"handled": True, "error": "save_path_unavailable"}
+            site_default = self._site_default(
+                self._latest_directory_registry(), source_site
+            )
+            if site_default:
+                raw_intent["processorProfile"] = site_default["processorProfile"]
             raw_intent["savePathCid"] = save_path_cid
             try:
                 validated = IntentModel.model_validate(raw_intent)

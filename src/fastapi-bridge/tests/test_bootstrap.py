@@ -40,7 +40,7 @@ def test_bootstrap_connect_returns_one_persistent_bearer(tmp_path: Path) -> None
         with TestClient(app) as client:
             status = client.get("/bootstrap/status")
             assert status.status_code == 200
-            assert status.json()["version"] == "1.11.0"
+            assert status.json()["version"] == "1.14.0"
             assert status.json()["paired"] is False
             assert status.json()["pairingAvailable"] is False
             assert "pairingCode" not in status.json()

@@ -402,7 +402,7 @@ class PairingStatus:
     def as_dict(self) -> dict[str, object]:
         return {
             "schema": 1,
-            "version": "1.11.0",
+            "version": "1.14.0",
             "paired": self.paired,
             "pairingAvailable": self.pairing_available,
             "expiresAt": self.expires_at,

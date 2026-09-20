@@ -7,239 +7,55 @@
 		<link rel="stylesheet" href="ui/popup/popup.css" />
 	</head>
 	<body>
-		<div class="push115-panel" id="push115-panel">
-			<div class="push115-header">
-				<span class="push115-header-title" id="push115-title">
-					<img src="icons/logo.png" width="36" height="36" alt="logo" />
-					<span id="push115-title-text">115离线助手</span>
-				</span>
+		<div class="push115-panel push115-single-page" id="push115-panel">
+			<header class="push115-header">
+				<div class="push115-brand">
+					<img src="icons/logo.png" width="36" height="36" alt="115" />
+					<div>
+						<strong id="push115-title-text">115离线助手</strong>
+						<span>Magnet · ED2K · Bridge</span>
+					</div>
+				</div>
 				<div class="push115-header-btns">
-					<a
-						class="push115-header-btn"
-						href="https://github.com/gangz1o/sehuatang-to-115"
-						target="_blank"
-						title="Github"
-					>
-						<svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor">
-							<path
-								d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"
-							></path>
-						</svg>
+					<button class="push115-header-btn" id="push115-open-options" type="button" title="打开高级设置">⚙</button>
+					<a class="push115-header-btn" href="https://github.com/gangz1o/sehuatang-to-115" target="_blank" rel="noopener noreferrer" title="Github">
+						<svg height="16" width="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
 					</a>
 				</div>
-			</div>
+			</header>
 
-				<div class="push115-tabs">
-					<div class="push115-tab active" data-tab="home">主页</div>
-					<div class="push115-tab" data-tab="tasks">后台管理</div>
-					<div class="push115-tab" data-tab="settings">设置</div>
-				</div>
+			<main class="push115-content">
+				<div id="push115-status-area" aria-live="polite"></div>
+				<div id="push115-progress" class="push115-progress hidden"><div class="push115-progress-text" id="push115-progress-text">处理中...</div><div class="push115-progress-track"><div class="push115-progress-bar" id="push115-progress-bar"></div></div></div>
 
-			<div class="push115-content">
-				<!-- Home Tab -->
-				<div class="push115-tab-content active" id="push115-tab-home">
-					<div id="push115-status-area"></div>
-					<div id="push115-progress" class="push115-progress hidden">
-						<div class="push115-progress-text" id="push115-progress-text">处理中...</div>
-						<div class="push115-progress-track">
-							<div class="push115-progress-bar" id="push115-progress-bar"></div>
-						</div>
+				<section class="push115-card push115-manual-card">
+					<div class="push115-card-heading"><div><h1 id="push115-quick-add-title">快速添加任务</h1><p id="push115-quick-add-hint">粘贴链接后继续确认，站点规则和处理方式可在高级设置中统一维护。</p></div><span class="push115-card-badge" id="push115-local-badge">本地</span></div>
+					<label class="push115-label" id="label-manual-download" for="push115-manual-downloads">手动添加 Magnet / ED2K</label>
+					<textarea id="push115-manual-downloads" class="push115-textarea" rows="4" placeholder="每行一个 magnet: 或 ed2k:"></textarea>
+					<button class="push115-btn push115-btn-primary push115-btn-full" id="push115-open-download-confirmation" type="button">继续确认</button>
+				</section>
+
+				<section class="push115-card push115-task-section">
+					<div class="push115-section-heading"><div><h2 id="label-background-tasks">最近任务</h2><p id="push115-recent-tasks-hint">只展示最近几项，完整日志和失败重试在高级设置页。</p></div><div class="push115-inline-actions"><button class="push115-icon-btn" id="push115-refresh-tasks" type="button" title="刷新">↻</button><button class="push115-link-btn" id="push115-open-task-manager" type="button">查看全部</button></div></div>
+					<div id="push115-task-list" class="push115-task-list"></div>
+				</section>
+
+				<section class="push115-card push115-quick-card">
+					<div class="push115-section-heading"><div><h2 id="push115-quick-options-title">快速选项</h2><p id="push115-quick-options-hint">常用选项即时保存；更多规则请打开高级设置。</p></div><button class="push115-link-btn" id="push115-open-options-from-tasks" type="button">高级设置</button></div>
+					<div class="push115-section"><label class="push115-label" id="label-save-path" for="push115-save-dir-select">默认保存目录</label><select id="push115-save-dir-select" class="push115-select"></select><div class="push115-hint" id="hint-cid">目录列表可在高级设置中维护。</div></div>
+					<div class="push115-quick-grid">
+						<label class="push115-toggle-card"><input type="checkbox" class="push115-checkbox" id="push115-auto-delete" /><span><strong id="label-auto-delete">安全清理垃圾</strong><small id="hint-safe-cleanup">仅处理明确安全的候选文件</small></span></label>
+						<label class="push115-toggle-card"><input type="checkbox" class="push115-checkbox" id="push115-auto-organize" /><span><strong id="label-auto-organize">自动整理视频</strong><small id="hint-organize">按页面番号整理任务文件</small></span></label>
 					</div>
+					<div class="push115-section push115-delete-inline" id="push115-delete-section" style="display:none"><div class="push115-row"><span id="label-delete-pre">删除小于</span><input type="number" class="push115-input" id="push115-delete-size" min="1" value="100" /><span id="label-delete-post">MB 的文件</span></div><div class="push115-hint" id="hint-delete-safe">字幕和主视频会被保护。</div></div>
+					<div class="push115-quick-grid push115-quick-grid-bottom"><button class="push115-btn push115-btn-secondary" id="push115-check-login" type="button"><img src="icons/check.png" width="16" height="16" alt="" />检查状态</button><button class="push115-btn push115-btn-secondary" id="push115-login-btn" type="button"><img src="icons/115.png" width="16" height="16" alt="" />扫码登录</button></div>
+				</section>
 
-					<div class="push115-section">
-						<label class="push115-label" id="label-manual-download" for="push115-manual-downloads">手动添加 Magnet / ED2K</label>
-						<textarea id="push115-manual-downloads" class="push115-textarea" rows="4" placeholder="每行一个 magnet: 或 ed2k:"></textarea>
-						<button class="push115-btn push115-btn-primary push115-btn-full" id="push115-open-download-confirmation" type="button">继续确认</button>
-					</div>
-
-					<div class="push115-section push115-task-section">
-						<div class="push115-task-heading">
-							<label class="push115-label" id="label-background-tasks">后台任务</label>
-							<button class="push115-task-manage-btn" id="push115-open-task-manager" type="button">后台管理</button>
-						</div>
-						<div id="push115-task-list" class="push115-task-list"></div>
-					</div>
-
-					<div class="push115-section">
-						<label class="push115-label" id="label-save-path">默认保存目录:</label>
-						<div class="push115-select-wrapper">
-							<select id="push115-save-dir-select" class="push115-select"></select>
-						</div>
-						<div class="push115-hint" id="hint-cid">提示: 在“设置”页维护目录列表（每行：目录名:CID）</div>
-					</div>
-
-					<div class="push115-divider"></div>
-
-					<div class="push115-section">
-						<div class="push115-checkbox-group">
-							<input type="checkbox" class="push115-checkbox" id="push115-auto-delete" />
-							<label class="push115-checkbox-label" for="push115-auto-delete" id="label-auto-delete"
-								>自动删除小文件</label
-							>
-						</div>
-					</div>
-
-					<div class="push115-section" id="push115-delete-section" style="display: none">
-						<div class="push115-row">
-							<span id="label-delete-pre">删除小于</span>
-							<input
-								type="number"
-								class="push115-input"
-								id="push115-delete-size"
-								style="width: 80px"
-								min="1"
-								value="100"
-							/>
-							<span id="label-delete-post">MB 的文件</span>
-						</div>
-						<div class="push115-hint" id="hint-delete-safe">仅回收明确垃圾；字幕、图片、NFO 默认保留，视频还会避开主视频和 CD1/CD2。</div>
-					</div>
-
-					<div class="push115-section">
-						<div class="push115-checkbox-group">
-							<input type="checkbox" class="push115-checkbox" id="push115-auto-organize" />
-							<label class="push115-checkbox-label" for="push115-auto-organize" id="label-auto-organize"
-								>自动整理视频文件</label
-							>
-						</div>
-						<div class="push115-hint" id="hint-organize">自动将散落视频按文件名整理到对应文件夹</div>
-					</div>
-
-					<div class="push115-section push115-btn-group">
-						<button class="push115-btn push115-btn-primary push115-btn-full" id="push115-check-login">
-							<img src="icons/check.png" width="16" height="16" />
-							检查状态
-						</button>
-						<button class="push115-btn push115-btn-secondary push115-btn-full" id="push115-login-btn">
-							<img src="icons/115.png" width="16" height="16" />
-							扫码登录
-						</button>
-					</div>
-				</div>
-
-				<!-- Background Task Manager Tab -->
-				<div class="push115-tab-content" id="push115-tab-tasks">
-					<div class="push115-task-manager-header">
-						<div>
-							<h2 class="push115-task-manager-title" id="label-task-manager">后台管理</h2>
-							<div class="push115-hint" id="hint-task-manager">查看任务状态、完整日志和失败重试。</div>
-						</div>
-						<button class="push115-btn push115-btn-secondary" id="push115-refresh-tasks" type="button">刷新</button>
-					</div>
-					<div class="push115-task-manager-summary" id="push115-task-manager-summary"></div>
-					<div id="push115-task-manager-list" class="push115-task-manager-list"></div>
-					<div class="push115-section push115-options-entry">
-						<button class="push115-btn push115-btn-secondary push115-btn-full" id="push115-open-options-from-tasks" type="button">
-							打开高级设置
-						</button>
-						<div class="push115-hint" id="hint-options-from-tasks">扩展名规则和清理开关可在完整设置页调整。</div>
-					</div>
-				</div>
-
-				<!-- Settings Tab -->
-				<div class="push115-tab-content" id="push115-tab-settings">
-					<div class="push115-section">
-						<label class="push115-label">语言 / Language</label>
-						<div class="push115-select-wrapper">
-							<select id="push115-language-select" class="push115-select">
-								<option value="zh-CN">简体中文</option>
-								<option value="en-US">English</option>
-							</select>
-						</div>
-					</div>
-
-					<div class="push115-section">
-						<label class="push115-label">主题 / Theme</label>
-						<div class="push115-select-wrapper">
-							<select id="push115-theme-select" class="push115-select">
-								<option value="auto">跟随系统</option>
-								<option value="light">浅色</option>
-								<option value="dark">深色</option>
-							</select>
-						</div>
-					</div>
-
-					<div class="push115-section">
-						<label class="push115-label" id="label-save-dirs">115 离线目录 (一行一个)</label>
-						<textarea
-							id="push115-save-dirs-input"
-							class="push115-textarea"
-							placeholder="例如：98预处理:3280039214730565554"
-						></textarea>
-						<div class="push115-hint" id="hint-save-dirs">格式：目录名:CID，例如：电影:123456789</div>
-					</div>
-
-					<div class="push115-divider"></div>
-
-					<div class="push115-section">
-						<div class="push115-checkbox-group">
-							<input type="checkbox" class="push115-checkbox" id="push115-auto-detect" />
-							<label class="push115-checkbox-label" for="push115-auto-detect" id="label-auto-detect"
-								>自动识别链接</label
-							>
-						</div>
-						<div class="push115-hint" id="hint-auto-detect">在所有网页上自动检测 magnet/ed2k 链接（需要额外权限）</div>
-					</div>
-
-					<div class="push115-section push115-options-entry">
-						<button class="push115-btn push115-btn-secondary push115-btn-full" id="push115-open-options" type="button">
-							打开完整设置与日志
-						</button>
-						<div class="push115-hint" id="hint-open-options">在独立页面管理扩展名规则，并查看后台处理日志。</div>
-					</div>
-				</div>
-			</div>
+				<details class="push115-popup-preferences"><summary id="push115-preferences-title">界面偏好</summary><div class="push115-quick-grid"><label class="push115-field"><span id="push115-language-label">语言 / Language</span><select id="push115-language-select" class="push115-select"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label><label class="push115-field"><span id="push115-theme-label">主题 / Theme</span><select id="push115-theme-select" class="push115-select"><option id="push115-theme-option-auto" value="auto">跟随系统</option><option id="push115-theme-option-light" value="light">浅色</option><option id="push115-theme-option-dark" value="dark">深色</option></select></label></div><label class="push115-checkbox-line"><input type="checkbox" class="push115-checkbox" id="push115-auto-detect" /><span><strong id="label-auto-detect">自动识别链接</strong><small id="hint-auto-detect">在网页上自动检测 magnet/ed2k（需要权限）</small></span></label></details>
+			</main>
 		</div>
 
-		<!-- Login Modal (hidden by default) -->
-		<div class="push115-modal-overlay" id="push115-login-modal" style="display: none">
-			<div class="push115-modal">
-				<div class="push115-modal-header">
-					<h3 class="push115-modal-title">
-						<img src="icons/115.png" width="24" height="24" style="border-radius: 4px" /> 115 扫码登录
-					</h3>
-				</div>
-				<div class="push115-modal-body">
-					<!-- Select Area -->
-					<div id="push115-login-select-area">
-						<div class="push115-label" style="text-align: center; margin-bottom: 12px">请选择登录应用类型</div>
-						<div class="push115-section">
-							<div class="push115-select-wrapper">
-								<select id="push115-app-select" class="push115-select">
-									<option value="web">115 (网页端)</option>
-									<option value="ios">115 (iOS端)</option>
-									<option value="android" selected>115 (Android端)</option>
-									<option value="ipad">115 (iPad端)</option>
-									<option value="tv">115 (Android电视端)</option>
-									<option value="qios">115管理 (iOS端)</option>
-									<option value="qandroid">115管理 (Android端)</option>
-									<option value="wechatmini">115生活 (微信小程序)</option>
-									<option value="alipaymini">115生活 (支付宝小程序)</option>
-								</select>
-							</div>
-						</div>
-						<div class="push115-hint" style="text-align: center; margin-bottom: 20px">
-							不同端登录状态可能独立，建议选择长期使用的端
-						</div>
-						<button class="push115-btn push115-btn-primary push115-btn-full" id="push115-login-start">开始扫码</button>
-					</div>
-
-					<!-- QR Code Area (hidden initially) -->
-					<div id="push115-qrcode-area" style="display: none">
-						<div class="push115-qrcode-container">
-							<div id="push115-qrcode-wrapper" class="push115-qrcode-wrapper">
-								<span class="push115-loading"></span>
-							</div>
-							<div class="push115-qrcode-status" id="push115-qrcode-status">正在获取二维码...</div>
-							<div class="push115-qrcode-tip" id="push115-qrcode-tip">请使用 115 App 扫码</div>
-						</div>
-					</div>
-				</div>
-				<div class="push115-modal-footer">
-					<button class="push115-btn push115-btn-secondary" id="push115-login-cancel">取消</button>
-				</div>
-			</div>
-		</div>
+		<div class="push115-modal-overlay" id="push115-login-modal" style="display:none"><div class="push115-modal"><div class="push115-modal-header"><h3 class="push115-modal-title"><img src="icons/115.png" width="24" height="24" alt="" /> 115 扫码登录</h3></div><div class="push115-modal-body"><div id="push115-login-select-area"><div class="push115-label" style="text-align:center;margin-bottom:12px">请选择登录应用类型</div><div class="push115-section"><select id="push115-app-select" class="push115-select"><option value="web">115 (网页端)</option><option value="ios">115 (iOS端)</option><option value="android" selected>115 (Android端)</option><option value="ipad">115 (iPad端)</option><option value="tv">115 (Android电视端)</option><option value="qios">115管理 (iOS端)</option><option value="qandroid">115管理 (Android端)</option><option value="wechatmini">115生活 (微信小程序)</option><option value="alipaymini">115生活 (支付宝小程序)</option></select></div><div class="push115-hint" style="text-align:center;margin-bottom:20px">不同端登录状态可能独立，建议选择长期使用的端</div><button class="push115-btn push115-btn-primary push115-btn-full" id="push115-login-start" type="button">开始扫码</button></div><div id="push115-qrcode-area" style="display:none"><div class="push115-qrcode-container"><div id="push115-qrcode-wrapper" class="push115-qrcode-wrapper"><span class="push115-loading"></span></div><div class="push115-qrcode-status" id="push115-qrcode-status">正在获取二维码...</div><div class="push115-qrcode-tip" id="push115-qrcode-tip">请使用 115 App 扫码</div></div></div></div><div class="push115-modal-footer"><button class="push115-btn push115-btn-secondary" id="push115-login-cancel" type="button">取消</button></div></div></div>
 
 		<script src="shared/config.js"></script>
 		<script src="shared/path-utils.js"></script>

@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     code = pairing.current_code
     if code is not None:
         print(
-            f"115 Offline Helper Bridge 1.11.0 配对码: {code} "
+            f"115 Offline Helper Bridge 1.14.0 配对码: {code} "
             f"（5 分钟内有效，最多失败 5 次）",
             flush=True,
         )

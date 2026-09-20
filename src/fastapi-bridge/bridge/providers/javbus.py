@@ -232,15 +232,30 @@ class JavBusProvider:
 
     @staticmethod
     def _ajax_parameters(source: str) -> dict[str, str]:
+        source = html_module.unescape(str(source or ""))
         values: dict[str, str] = {}
         for key in _AJAX_KEYS:
-            pattern = re.compile(
-                rf"(?:\b(?:var|let|const)\s+)?\b{key}\b\s*=\s*{_AJAX_VALUE}",
-                re.IGNORECASE,
+            patterns = (
+                re.compile(
+                    rf"(?:\b(?:var|let|const)\s+)?\b{key}\b\s*[:=]\s*{_AJAX_VALUE}",
+                    re.IGNORECASE,
+                ),
+                re.compile(
+                    rf"\bdata-{key}\s*=\s*{_AJAX_VALUE}",
+                    re.IGNORECASE,
+                ),
+                re.compile(
+                    rf"[?&]{key}=([^&#\"'\s<>]+)",
+                    re.IGNORECASE,
+                ),
             )
-            match = pattern.search(source)
+            match = None
+            for pattern in patterns:
+                match = pattern.search(source)
+                if match:
+                    break
             if match:
-                value = match.group(1).strip()
+                value = unquote(match.group(1).strip())
                 if key in {"gid", "uc"} and not value.isdigit():
                     continue
                 if key == "lang" and not re.fullmatch(r"[A-Za-z_-]{1,16}", value):
@@ -361,7 +376,9 @@ class JavBusProvider:
         cover_url = self._cover_url(page_soup, resolved_page_url)
         candidates = self._parse_magnets(page_source, title)
 
-        ajax = self._ajax_parameters(self._script_text(page_soup))
+        ajax = self._ajax_parameters(
+            page_source + "\n" + self._script_text(page_soup)
+        )
         if ajax.get("gid"):
             endpoint = urljoin(resolved_page_url, "/ajax/uncledatoolsbyajax.php")
             endpoint = self._validate_allowed_url(endpoint)
@@ -372,13 +389,38 @@ class JavBusProvider:
             }
             if ajax.get("img"):
                 ajax_params["img"] = ajax["img"]
-            ajax_response, _ = await self._get(
-                endpoint,
-                params=ajax_params,
-                headers={"Referer": resolved_page_url},
-            )
-            ajax_source = self._response_text(ajax_response)
-            candidates.extend(self._parse_magnets(ajax_source, title))
+            ajax_endpoints = [endpoint]
+            if self.base_host in {"javbus.com", "www.javbus.com"}:
+                alternate_host = "www.javbus.com" if self.base_host == "javbus.com" else "javbus.com"
+                alternate = f"https://{alternate_host}/ajax/uncledatoolsbyajax.php"
+                if alternate not in ajax_endpoints:
+                    ajax_endpoints.append(alternate)
+            ajax_error: ProviderError | None = None
+            for ajax_endpoint in ajax_endpoints:
+                try:
+                    ajax_response, _ = await self._get(
+                        ajax_endpoint,
+                        params=ajax_params,
+                        headers={
+                            "Accept": "text/html, */*;q=0.01",
+                            "Referer": resolved_page_url,
+                            "X-Requested-With": "XMLHttpRequest",
+                        },
+                    )
+                    ajax_source = self._response_text(ajax_response)
+                    ajax_candidates = self._parse_magnets(ajax_source, title)
+                    candidates.extend(ajax_candidates)
+                    if ajax_candidates or candidates:
+                        break
+                except ProviderError as error:
+                    ajax_error = error
+                    continue
+            # The page can already contain a usable magnet.  JavBus has
+            # intermittently rejected this enrichment endpoint with 403 or a
+            # challenge page; keep the page candidate instead of turning a
+            # partial result into “temporarily unavailable”.
+            if not candidates and ajax_error is not None:
+                raise ajax_error
 
         deduped: list[MagnetCandidate] = []
         seen: set[str] = set()

@@ -44,10 +44,21 @@ const DEFAULT_CONFIG = {
 	[CONFIG_KEYS.BRIDGE_TARGET_CID]: '0',
 }
 
+const SETTINGS_PAGES = Object.freeze(['general', 'directories', 'sites', 'bridge', 'rules', 'logs'])
+let activeSettingsPage = 'general'
+
 const I18N_STRINGS = {
 	'zh-CN': {
 		page_title: '115离线助手设置',
 		page_subtitle: '规则、任务与日志集中管理',
+		settings_nav_title: '设置导航',
+		settings_nav_general: '常规',
+		settings_nav_directories: '目录同步',
+		settings_nav_sites: '站点规则',
+		settings_nav_bridge: 'Bridge / Telegram',
+		settings_nav_rules: '文件规则',
+		settings_nav_logs: '任务日志',
+		settings_nav_hint: '切换分页不会丢失未保存内容；完成修改后点击底部保存。',
 		settings_title: '设置',
 		settings_subtitle: '这些设置会被后台任务和网页推送共同使用。',
 		language_label: '语言 / Language',
@@ -61,9 +72,9 @@ const I18N_STRINGS = {
 		threshold_hint: '阈值只用于筛选；主视频、CD/Disc/Part 分片不会因体积小而删除。',
 		save_dirs_label: '115 离线目录（一行一个）',
 		save_dirs_placeholder: '例如：电影:123456789',
-		save_dirs_hint: '格式：目录名:CID，例如：电影:123456789；也可从扫描结果点选。手工 CID 仍作为高级 fallback。',
+		save_dirs_hint: '格式：目录名:CID，例如：电影:123456789；“加入”只把已扫描目录加入扩展的保存目录列表，不会创建目录或立即下载。Telegram /dir 的“使用当前目录”是单独的临时选择；站点规则会按各自默认 CID 自动入队。',
 		directory_index_title: '115 目录索引',
-		directory_index_hint: '先扫描根目录一级；可将目录加入上方列表，或显式扫描它的子目录并同步给本地 Bridge。',
+		directory_index_hint: '先扫描根目录一级；可将目录加入上方列表，或显式扫描它的子目录并同步给本地 Bridge。JavBus、Nyaa 等站点会使用各自站点规则中的默认 CID；Telegram /dir 的选择优先级最高。',
 		directory_scan_button: '扫描目录',
 		directory_scan_empty: '尚未扫描目录。请保持 115 登录状态后点击“扫描目录”。',
 		directory_scan_root: '根目录',
@@ -98,10 +109,12 @@ const I18N_STRINGS = {
 		clean_images_hint: '默认关闭；开启后，小于阈值的常见图片会进入回收候选。',
 		clean_nfo_label: '清理 NFO',
 		clean_nfo_hint: '默认关闭；开启后，小于阈值的 .nfo 会进入回收候选。',
+		sites_title: '站点增强',
+		sites_subtitle: '每个站点独立控制启用状态、保存目录、页面增强方式与后台 processor；保存目录选项来自上方目录列表。JavBus 通常选择 AV 目录，Anime 站点选择番剧目录。',
 		bridge_title: '本地服务连接',
 		bridge_subtitle: '从本机服务领取候选任务并提交到 115。地址固定为 http://127.0.0.1:52115，不会读取网页 Cookie。',
 		bridge_enabled_label: '启用本地服务连接',
-		bridge_enabled_hint: '启用后每 30 秒领取一次任务；关闭时不会请求本地服务。',
+		bridge_enabled_hint: '启用后每 30 秒探测并领取任务；Bridge 晚于浏览器启动也会自动连接。关闭时不会请求本地服务。',
 		bridge_token_label: '连接密钥',
 		bridge_token_hint: '密钥仅保存在本机，用于连接本地服务；115 登录信息留在浏览器。',
 		bridge_target_label: 'Bridge 默认目录',
@@ -109,22 +122,21 @@ const I18N_STRINGS = {
 		bridge_permission_hint: '首次启用会请求 http://127.0.0.1/* 的可选权限。',
 		bridge_permission_denied: '未获得本地 Bridge 权限，Bridge 保持关闭。',
 		bridge_token_required: '启用 Bridge 前请填写 Bearer token。',
-		bridge_pairing_title: '快速配对',
-		bridge_pairing_hint: 'Bridge 启动后会在终端显示一次性配对码；配对成功后，Bearer token 会安全保存在扩展本地。',
+		bridge_bootstrap_title: '自动连接',
+		bridge_bootstrap_hint: '扩展只连接固定的本机 Bridge；后台会持续探测端口，首次可用时自动取得并保存 Bearer 凭据，不需要配对码或五分钟窗口。',
 		bridge_refresh_button: '检查 Bridge',
+		bridge_connect_button: '连接本机 Bridge',
 		bridge_status_label: 'Bridge 状态',
-		bridge_pairing_code_label: '配对码',
-		bridge_pairing_code_placeholder: '例如：K7MP-4Q2D',
-		bridge_pair_button: '配对并启用',
 		bridge_advanced_title: '高级配置（手工 token / 目录）',
 		bridge_status_unavailable: '未发现本地 Bridge',
-		bridge_status_pairing: '等待配对码',
-		bridge_status_paired: '已配对',
-		bridge_status_unpaired: '未配对',
-		bridge_pairing_success: 'Bridge 已配对；正在同步目录。',
-		bridge_pairing_failed: 'Bridge 配对失败：',
-		bridge_pairing_required: '请输入终端显示的配对码。',
+		bridge_status_connected: '已连接',
+		bridge_status_connecting: '正在连接……',
+		bridge_connect_success: 'Bridge 已连接；正在同步目录。',
+		bridge_connect_failed: 'Bridge 连接失败：',
 		bridge_sync_pending: '目录将在 Bridge 可用后同步。',
+		bridge_sync_success: 'Bridge 已连接；目录已同步 {count} 项（修订 {revision}）。',
+		bridge_sync_empty: 'Bridge 已连接；尚未建立目录索引，请先扫描 115 目录。',
+		bridge_sync_failed: 'Bridge 已连接，但目录同步失败：',
 		telegram_title: 'Telegram Bot',
 		telegram_hint: 'Bot Token 只用于配置本地 Bridge；扩展不会在状态、日志或页面文字中回显它。',
 		telegram_refresh_button: '刷新状态',
@@ -137,6 +149,7 @@ const I18N_STRINGS = {
 		telegram_status_label: 'Telegram 状态',
 		telegram_bot_label: '机器人',
 		telegram_owner_label: '管理员',
+		telegram_owner_hint: '首次配置后，在机器人私聊中发送 /start 即可自动绑定当前管理员。',
 		telegram_status_unavailable: '未配置或 Bridge 未连接',
 		telegram_status_enabled: '运行中',
 		telegram_status_disabled: '已停止',
@@ -145,7 +158,6 @@ const I18N_STRINGS = {
 		telegram_owner_bound: '已绑定',
 		telegram_owner_unbound: '未绑定',
 		telegram_bot_unknown: '未知',
-		telegram_claim_link: '打开 Telegram 绑定管理员',
 		telegram_action_failed: 'Telegram 操作失败：',
 		telegram_action_success: 'Telegram 设置已更新。',
 		save_button: '保存设置',
@@ -182,6 +194,14 @@ const I18N_STRINGS = {
 	'en-US': {
 		page_title: '115 Offline Helper Settings',
 		page_subtitle: 'Manage rules, tasks, and logs in one place',
+		settings_nav_title: 'Settings navigation',
+		settings_nav_general: 'General',
+		settings_nav_directories: 'Directories',
+		settings_nav_sites: 'Site rules',
+		settings_nav_bridge: 'Bridge / Telegram',
+		settings_nav_rules: 'File rules',
+		settings_nav_logs: 'Task logs',
+		settings_nav_hint: 'Switching pages keeps unsaved changes; use Save at the bottom when finished.',
 		settings_title: 'Settings',
 		settings_subtitle: 'These settings are shared by background tasks and link submission.',
 		language_label: 'Language',
@@ -195,9 +215,9 @@ const I18N_STRINGS = {
 		threshold_hint: 'This only filters candidates; the main video and CD/Disc/Part files are protected.',
 		save_dirs_label: '115 offline directories (one per line)',
 		save_dirs_placeholder: 'e.g. Movies:123456789',
-		save_dirs_hint: 'Format: Name:CID, e.g. Movies:123456789. You can also pick scan results below; manual CIDs remain an advanced fallback.',
+		save_dirs_hint: 'Format: Name:CID, e.g. Movies:123456789. “Add” only adds a scanned directory to the extension save-path list; it does not create a directory or start a download. Telegram /dir is a separate per-user selection, while site rules provide automatic defaults.',
 		directory_index_title: '115 directory index',
-		directory_index_hint: 'Scan the root directory first; add folders above or explicitly scan their children, then sync the index to the local Bridge.',
+		directory_index_hint: 'Scan the root directory first; add folders above or explicitly scan their children, then sync the index to the local Bridge. JavBus, Nyaa, and other sites use their configured default CID; a Telegram /dir selection takes precedence.',
 		directory_scan_button: 'Scan directories',
 		directory_scan_empty: 'No directory scan yet. Keep 115 signed in, then click “Scan directories”.',
 		directory_scan_root: 'Root directory',
@@ -232,10 +252,12 @@ const I18N_STRINGS = {
 		clean_images_hint: 'Off by default; when enabled, common images below the threshold become candidates.',
 		clean_nfo_label: 'Clean NFO files',
 		clean_nfo_hint: 'Off by default; when enabled, .nfo files below the threshold become candidates.',
+		sites_title: 'Site enhancements',
+		sites_subtitle: 'Control each site independently: enabled state, save directory, page enhancement, and background processor. JavBus usually targets AV; Anime sites usually target 番剧.',
 		bridge_title: 'Local service connection',
 		bridge_subtitle: 'Claim candidates from the local service and submit them to 115. The endpoint is fixed at http://127.0.0.1:52115; page cookies are never read.',
 		bridge_enabled_label: 'Enable local service connection',
-		bridge_enabled_hint: 'Claims one job every 30 seconds when enabled; disabled mode makes no local requests.',
+		bridge_enabled_hint: 'Probes and claims every 30 seconds when enabled; a Bridge started later is connected automatically. Disabled mode makes no local requests.',
 		bridge_token_label: 'Connection key',
 		bridge_token_hint: 'The key stays on this device and is used only for the local service; 115 login information stays in the browser.',
 		bridge_target_label: 'Bridge default directory',
@@ -243,22 +265,21 @@ const I18N_STRINGS = {
 		bridge_permission_hint: 'Enabling for the first time requests the optional http://127.0.0.1/* permission.',
 		bridge_permission_denied: 'The local Bridge permission was not granted; Bridge remains disabled.',
 		bridge_token_required: 'Enter a Bearer token before enabling Bridge.',
-		bridge_pairing_title: 'Quick pairing',
-		bridge_pairing_hint: 'When Bridge starts, it prints a one-time pairing code in the terminal. After pairing, the Bearer token is stored locally in the extension.',
+		bridge_bootstrap_title: 'Automatic connection',
+		bridge_bootstrap_hint: 'The extension connects only to the fixed local Bridge. The worker keeps probing the port and stores a Bearer credential automatically when it becomes available, without a pairing code or five-minute window.',
 		bridge_refresh_button: 'Check Bridge',
+		bridge_connect_button: 'Connect local Bridge',
 		bridge_status_label: 'Bridge status',
-		bridge_pairing_code_label: 'Pairing code',
-		bridge_pairing_code_placeholder: 'e.g. K7MP-4Q2D',
-		bridge_pair_button: 'Pair and enable',
 		bridge_advanced_title: 'Advanced settings (manual token / directory)',
 		bridge_status_unavailable: 'Local Bridge not found',
-		bridge_status_pairing: 'Waiting for pairing code',
-		bridge_status_paired: 'Paired',
-		bridge_status_unpaired: 'Not paired',
-		bridge_pairing_success: 'Bridge paired; syncing the directory index.',
-		bridge_pairing_failed: 'Bridge pairing failed: ',
-		bridge_pairing_required: 'Enter the pairing code shown in the terminal.',
+		bridge_status_connected: 'Connected',
+		bridge_status_connecting: 'Connecting…',
+		bridge_connect_success: 'Bridge connected; syncing the directory index.',
+		bridge_connect_failed: 'Bridge connection failed: ',
 		bridge_sync_pending: 'The directory will sync when Bridge is available.',
+		bridge_sync_success: 'Bridge connected; synced {count} directories (revision {revision}).',
+		bridge_sync_empty: 'Bridge connected; no directory index yet. Scan the 115 directories first.',
+		bridge_sync_failed: 'Bridge connected, but directory sync failed: ',
 		telegram_title: 'Telegram Bot',
 		telegram_hint: 'The Bot Token is used only to configure the local Bridge; the extension never echoes it in status, logs, or page text.',
 		telegram_refresh_button: 'Refresh status',
@@ -271,6 +292,7 @@ const I18N_STRINGS = {
 		telegram_status_label: 'Telegram status',
 		telegram_bot_label: 'Bot',
 		telegram_owner_label: 'Owner',
+		telegram_owner_hint: 'After setup, send /start in a private chat with the bot to bind the first owner automatically.',
 		telegram_status_unavailable: 'Not configured or Bridge unavailable',
 		telegram_status_enabled: 'Running',
 		telegram_status_disabled: 'Stopped',
@@ -279,7 +301,6 @@ const I18N_STRINGS = {
 		telegram_owner_bound: 'Bound',
 		telegram_owner_unbound: 'Not bound',
 		telegram_bot_unknown: 'Unknown',
-		telegram_claim_link: 'Open Telegram to bind the owner',
 		telegram_action_failed: 'Telegram action failed: ',
 		telegram_action_success: 'Telegram settings updated.',
 		save_button: 'Save settings',
@@ -322,6 +343,48 @@ function t(key) {
 	const locale = configCache[CONFIG_KEYS.I18N_LOCALE] || 'zh-CN'
 	const strings = I18N_STRINGS[locale] || I18N_STRINGS['zh-CN']
 	return strings[key] || key
+}
+
+function normalizeSettingsPage(value) {
+	const page = String(value || '').trim().toLowerCase()
+	return SETTINGS_PAGES.includes(page) ? page : 'general'
+}
+
+function applySettingsPage(value, options = {}) {
+	const page = normalizeSettingsPage(value)
+	activeSettingsPage = page
+	if (options.updateHash !== false && typeof history !== 'undefined' && typeof location !== 'undefined') {
+		const nextHash = `#${page}`
+		if (location.hash !== nextHash) history.replaceState(null, '', nextHash)
+	}
+	if (typeof document === 'undefined') return page
+	document.body?.setAttribute('data-settings-page', page)
+	document.querySelectorAll('[data-settings-page]').forEach(element => {
+		const pages = String(element.dataset.settingsPage || '').split(/\s+/).filter(Boolean)
+		const hidden = !pages.includes(page)
+		element.hidden = hidden
+		if (hidden) element.setAttribute('aria-hidden', 'true')
+		else element.removeAttribute('aria-hidden')
+	})
+	document.querySelectorAll('[data-settings-page-target]').forEach(button => {
+		const selected = normalizeSettingsPage(button.dataset.settingsPageTarget) === page
+		button.classList.toggle('active', selected)
+		button.classList.toggle('is-active', selected)
+		if (selected) button.setAttribute('aria-current', 'page')
+		else button.removeAttribute('aria-current')
+	})
+	return page
+}
+
+function initSettingsPageRouting() {
+	if (typeof document === 'undefined') return
+	document.querySelectorAll('[data-settings-page-target]').forEach(button => {
+		button.addEventListener('click', () => applySettingsPage(button.dataset.settingsPageTarget))
+	})
+	if (typeof window !== 'undefined') {
+		window.addEventListener('hashchange', () => applySettingsPage(location.hash.slice(1), { updateHash: false }))
+	}
+	applySettingsPage(typeof location !== 'undefined' ? location.hash.slice(1) : activeSettingsPage)
 }
 
 function replaceCount(text, count) {
@@ -620,7 +683,6 @@ async function requestContentScriptPermissions(siteProfiles, extraOrigins = []) 
 
 async function requestBridgePermission(nextConfig) {
 	if (nextConfig[CONFIG_KEYS.BRIDGE_ENABLED] !== true) return []
-	if (!nextConfig[CONFIG_KEYS.BRIDGE_TOKEN]) throw new Error(t('bridge_token_required'))
 	const origin = Push115.Config.BRIDGE_HOST_PERMISSION
 	if (!chrome.permissions?.contains || !chrome.permissions?.request) return []
 	const granted = await chrome.permissions.contains({ origins: [origin] })
@@ -638,32 +700,64 @@ async function ensureBridgeHostPermission() {
 function renderBridgeBootstrapStatus(status) {
 	const element = document.getElementById('push115-bridge-bootstrap-status')
 	if (!element) return
+	if (status?.connecting === true) {
+		element.textContent = t('bridge_status_connecting')
+		return
+	}
 	if (!status) {
 		element.textContent = t('bridge_status_unavailable')
 		return
 	}
-	if (status.paired) {
-		element.textContent = t('bridge_status_paired')
-	} else if (status.pairingAvailable) {
-		element.textContent = t('bridge_status_pairing')
-	} else {
-		element.textContent = t('bridge_status_unpaired')
+	element.textContent = status.connected === true || status.paired === true
+		? t('bridge_status_connected')
+		: t('bridge_status_unavailable')
+}
+
+function bridgeDirectorySyncMessage(value) {
+	const sync = value?.directorySync && typeof value.directorySync === 'object'
+		? value.directorySync
+		: value
+	if (!sync || typeof sync !== 'object') return null
+	if (sync.skipped === true && sync.reason === 'empty') {
+		return { type: '', text: t('bridge_sync_empty') }
 	}
+	if (sync.skipped === true && sync.reason === 'directory_index_sync_failed') {
+		return { type: 'error', text: t('bridge_sync_failed') + String(sync.error || 'unknown error') }
+	}
+	if (sync.bridge?.permission === false) {
+		return { type: 'error', text: t('bridge_sync_failed') + t('bridge_permission_denied') }
+	}
+	if (sync.bridge?.disabled === true || sync.disabled === true) {
+		return { type: '', text: t('bridge_sync_pending') }
+	}
+	if (sync.bridge?.ok === false) {
+		return { type: 'error', text: t('bridge_sync_failed') + String(sync.bridge.error || 'unknown error') }
+	}
+	if (sync.bridge?.ok === true || sync.success === true) {
+		const count = Array.isArray(sync.index?.directories)
+			? sync.index.directories.length
+			: Number(sync.result?.directoryCount) || 0
+		const revision = Number(sync.index?.revision ?? sync.revision ?? 0) || 0
+		return {
+			type: 'success',
+			text: t('bridge_sync_success').replace('{count}', String(count)).replace('{revision}', String(revision)),
+		}
+	}
+	return null
+}
+
+async function syncDirectoryFromOptions() {
+	return sendMessage('SYNC_DIRECTORY_INDEX')
 }
 
 function renderTelegramStatus(status) {
 	const statusText = document.getElementById('push115-telegram-status-text')
 	const botName = document.getElementById('push115-telegram-bot-name')
 	const ownerStatus = document.getElementById('push115-telegram-owner-status')
-	const claimLink = document.getElementById('push115-telegram-claim-link')
 	if (!status) {
 		if (statusText) statusText.textContent = t('telegram_status_unavailable')
 		if (botName) botName.textContent = t('telegram_bot_unknown')
 		if (ownerStatus) ownerStatus.textContent = t('telegram_owner_unbound')
-		if (claimLink) {
-			claimLink.hidden = true
-			claimLink.removeAttribute('href')
-		}
 		return
 	}
 	if (statusText) {
@@ -673,12 +767,6 @@ function renderTelegramStatus(status) {
 	}
 	if (botName) botName.textContent = status.botUsername ? `@${status.botUsername}` : t('telegram_bot_unknown')
 	if (ownerStatus) ownerStatus.textContent = status.ownerBound ? t('telegram_owner_bound') : t('telegram_owner_unbound')
-	if (claimLink) {
-		const url = String(status.ownerClaimUrl || '').trim()
-		claimLink.hidden = !url || status.ownerBound
-		if (url && !claimLink.hidden) claimLink.href = url
-		else claimLink.removeAttribute('href')
-	}
 }
 
 async function refreshTelegramStatus() {
@@ -705,47 +793,101 @@ async function refreshTelegramStatus() {
 async function refreshBridgeOnboarding(requestPermission = false) {
 	try {
 		if (requestPermission) await ensureBridgeHostPermission()
-		const status = await Push115.Background.BridgeClient.bootstrapStatus()
+		const stored = await chrome.storage.local.get([CONFIG_KEYS.BRIDGE_TOKEN, CONFIG_KEYS.BRIDGE_ENABLED])
+		const token = String(stored[CONFIG_KEYS.BRIDGE_TOKEN] || '').trim()
+		let status
+		if (!token && stored[CONFIG_KEYS.BRIDGE_ENABLED] !== true) {
+			renderBridgeBootstrapStatus(null)
+			await refreshTelegramStatus()
+			return null
+		}
+		if (!token) {
+			const hasPermission = !chrome.permissions?.contains
+				|| await chrome.permissions.contains({ origins: [Push115.Config.BRIDGE_HOST_PERMISSION] })
+			if (!hasPermission) {
+				renderBridgeBootstrapStatus(null)
+				await refreshTelegramStatus()
+				return null
+			}
+			renderBridgeBootstrapStatus({ connecting: true })
+			status = await Push115.Background.BridgeClient.connectBridge()
+			const connectionMessage = bridgeDirectorySyncMessage(status)
+			const connectionStatus = document.getElementById('push115-bridge-connect-status')
+			if (connectionStatus && connectionMessage) {
+				connectionStatus.className = `push115-status ${connectionMessage.type}`
+				connectionStatus.textContent = connectionMessage.text
+			}
+			const values = await chrome.storage.local.get([
+				CONFIG_KEYS.BRIDGE_TOKEN,
+				CONFIG_KEYS.BRIDGE_ENABLED,
+				CONFIG_KEYS.BRIDGE_PAIRED,
+			])
+			configCache = { ...configCache, ...values }
+			fillForm()
+		} else {
+			status = await Push115.Background.BridgeClient.bootstrapStatus()
+			if (status?.connected === true || status?.paired === true) {
+				try {
+					const sync = await syncDirectoryFromOptions()
+					const syncMessage = bridgeDirectorySyncMessage(sync)
+					const message = document.getElementById('push115-bridge-connect-status')
+					if (message && syncMessage) {
+						message.className = `push115-status ${syncMessage.type}`
+						message.textContent = syncMessage.text
+					}
+				} catch (error) {
+					const message = document.getElementById('push115-bridge-connect-status')
+					if (message) {
+						message.className = 'push115-status error'
+						message.textContent = t('bridge_sync_failed') + (error?.message || error)
+					}
+				}
+			}
+		}
 		renderBridgeBootstrapStatus(status)
 		await refreshTelegramStatus()
 		return status
 	} catch (error) {
 		renderBridgeBootstrapStatus(null)
+		const message = document.getElementById('push115-bridge-connect-status')
+		if (message) {
+			message.className = 'push115-status'
+			message.textContent = ''
+		}
 		renderTelegramStatus(null)
 		return null
 	}
 }
 
-async function pairBridgeFromOptions() {
-	const button = document.getElementById('push115-bridge-pair')
-	const status = document.getElementById('push115-bridge-pair-status')
-	const codeInput = document.getElementById('push115-bridge-pairing-code')
-	const code = String(codeInput?.value || '').trim()
-	if (!code) {
-		if (status) {
-			status.className = 'push115-status error'
-			status.textContent = t('bridge_pairing_required')
-		}
-		return
-	}
+async function connectBridgeFromOptions() {
+	const button = document.getElementById('push115-bridge-refresh')
+	const status = document.getElementById('push115-bridge-connect-status')
 	if (button) button.disabled = true
 	try {
+		if (status) {
+			status.className = 'push115-status'
+			status.textContent = ''
+		}
+		renderBridgeBootstrapStatus({ connecting: true })
 		await ensureBridgeHostPermission()
-		await Push115.Background.BridgeClient.pairBridge(code)
+		const connection = await Push115.Background.BridgeClient.connectBridge()
 		const values = await chrome.storage.local.get([CONFIG_KEYS.BRIDGE_TOKEN, CONFIG_KEYS.BRIDGE_ENABLED, CONFIG_KEYS.BRIDGE_PAIRED])
 		configCache = { ...configCache, ...values }
 		fillForm()
+		const syncMessage = bridgeDirectorySyncMessage(connection)
 		if (status) {
-			status.className = 'push115-status success'
-			status.textContent = t('bridge_pairing_success')
+			status.className = `push115-status ${syncMessage?.type || 'success'}`
+			status.textContent = syncMessage?.text || t('bridge_connect_success')
 		}
-		renderBridgeBootstrapStatus({ paired: true, pairingAvailable: false })
+		renderBridgeBootstrapStatus({ connected: true, paired: true })
+		await refreshDirectoryIndex()
 		await refreshTelegramStatus()
 	} catch (error) {
 		if (status) {
 			status.className = 'push115-status error'
-			status.textContent = t('bridge_pairing_failed') + (error?.message || error)
+			status.textContent = t('bridge_connect_failed') + (error?.message || error)
 		}
+		renderBridgeBootstrapStatus(null)
 	} finally {
 		if (button) button.disabled = false
 	}
@@ -865,8 +1007,7 @@ async function resetSettings() {
 function bindEvents() {
 	document.getElementById('push115-settings-form').addEventListener('submit', saveSettings)
 	document.getElementById('push115-reset-settings').addEventListener('click', resetSettings)
-	document.getElementById('push115-bridge-refresh')?.addEventListener('click', () => void refreshBridgeOnboarding(true))
-	document.getElementById('push115-bridge-pair')?.addEventListener('click', () => void pairBridgeFromOptions())
+	document.getElementById('push115-bridge-refresh')?.addEventListener('click', () => void connectBridgeFromOptions())
 	document.getElementById('push115-telegram-refresh')?.addEventListener('click', () => void refreshTelegramStatus())
 	document.getElementById('push115-telegram-configure')?.addEventListener('click', () => void configureTelegramFromOptions())
 	document.getElementById('push115-telegram-start')?.addEventListener('click', () => void updateTelegramFromOptions('start'))
@@ -917,6 +1058,7 @@ async function init() {
 		items[CONFIG_KEYS.SITE_PROFILES],
 		configCache,
 	)
+	initSettingsPageRouting()
 	applyTheme(getConfig(CONFIG_KEYS.THEME))
 	applyLocale()
 	fillForm()

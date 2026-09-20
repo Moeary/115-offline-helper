@@ -16,7 +16,7 @@ pixi install
 pixi run start
 ```
 
-Bridge 首次启动会在终端打印 5 分钟内有效的一次性 Crockford 配对码。打开扩展设置页，检查本地 Bridge 并输入配对码；Bearer token 会自动保存到扩展本地。浏览器重装后可用 `pixi run pair` 显式打开新的配对窗口。Telegram Bot Token 在扩展设置页填写，Bridge 会用 `getMe` 校验并动态启动 polling。
+Bridge 正常启动不会打开短时配对窗口。打开扩展设置页并点击“连接本机 Bridge”后，扩展通过本机 bootstrap 接口取得持久 Bearer 凭据；浏览器只需授权固定的 `http://127.0.0.1/*`，不需要输入配对码或复制 token。Telegram Bot Token 在扩展设置页填写，Bridge 会用 `getMe` 校验并动态启动 polling。
 
 `.env.example` 仅供高级配置使用。环境变量仍可覆盖 provider、数据库、超时、静态目录 fallback 等选项，例如：
 
@@ -44,14 +44,15 @@ pixi run test
 
 ```text
 GET  /bootstrap/status
+POST /bootstrap/connect
 POST /bootstrap/pair  {"schema":1,"pairingCode":"K7MP-4Q2D","clientId":"..."}
 ```
 
-配对码单次使用，有效期 5 分钟，最多允许 5 次失败。成功响应包含一次性的
-`bearerToken`；之后所有 `/v1/*` 请求仍必须使用 `Authorization: Bearer ...`。
-配对完成后，只有显式运行 `pixi run pair` 才会重新打开配对窗口。
+`POST /bootstrap/connect` 仅允许 loopback 访问，成功响应包含持久的 `bearerToken`；之后所有
+`/v1/*` 请求仍必须使用 `Authorization: Bearer ...`。`/bootstrap/pair` 与 `pixi run pair`
+仅保留给旧版迁移和显式恢复流程，不是普通安装路径。
 `GET /v1/runtime/telegram` 返回 `enabled`、`configured`、`botUsername`、`ownerBound`
-和管理员认领链接（不返回 token）；`PUT /v1/runtime/telegram` 接收 `enabled` 与可选
+和管理员绑定状态（不返回 token）；`PUT /v1/runtime/telegram` 接收 `enabled` 与可选
 `botToken`，会校验 `getMe` 后动态停止、启动或重启 polling。
 
 所有 `/v1/*` 路由都需要 `Authorization: Bearer <token>`。Intent 的 `url` 必须是严格的
@@ -67,7 +68,7 @@ BTIH Magnet 或 ED2K file 链接。主要路由如下：
 | `POST /v1/jobs/{jobId}/cancel` | 取消排队任务，或为活动任务创建取消动作 |
 | `POST /v1/jobs/claim` | 扩展按 worker 领取任务 |
 | `POST /v1/jobs/{jobId}/events` | 扩展回传任务进度和终态 |
-| `POST /v1/actions/claim` | 扩展按同一 worker 领取取消动作 |
+| `POST /v1/actions/claim` | 扩展按同一 worker 领取取消或目录同步动作 |
 | `POST /v1/actions/{actionId}/events` | 回传动作结果；`eventId` 幂等 |
 
 扩展使用的领取请求为：
@@ -103,7 +104,7 @@ Content-Type: application/json
 
 ### 从零配置与使用
 
-下面的流程适合首次使用。普通用户只需要一次配对码和一个 Telegram Bot Token，
+下面的流程适合首次使用。普通用户只需要一次本机连接和一个 Telegram Bot Token，
 不需要查 Extension ID、填写 chat/user ID 或手工编辑 `.env`。
 
 1. 在仓库根目录安装并启动 Bridge：
@@ -113,24 +114,23 @@ Content-Type: application/json
    pixi run start
    ```
 
-   保持这个终端和 Bridge 进程运行。终端会打印一次性配对码，配对码有效 5 分钟，
-   最多允许 5 次错误尝试。
-2. 打开扩展设置页，在“本地自动任务 Bridge”中点击“检查 Bridge”，输入终端里的配对码，
-   再点击“配对并启用”；首次操作时允许扩展访问 `http://127.0.0.1/*`。
-   配对成功后 Bearer token 会保存到扩展本地，不需要复制到 README 或 `.env`。
+   保持这个终端和 Bridge 进程运行；正常启动不会打印一次性配对码。
+2. 打开扩展设置页，在“本地自动任务 Bridge”中点击“连接本机 Bridge”；首次操作时允许扩展访问
+   `http://127.0.0.1/*`。连接成功后 Bearer token 会由 Bridge 持久保存并由扩展安全存储，
+   不需要复制到 README 或 `.env`。
 3. 在 Telegram 中打开 `@BotFather`，发送 `/newbot`，按提示填写机器人显示名和用户名，
    复制 BotFather 返回的 HTTP API Token。Token 是秘密凭据，不要发到群组、截图或提交到 Git。
 4. 回到扩展设置页的“Telegram Bot”，将 Token 粘贴到密码框，点击“连接 Telegram”。
    Bridge 会调用 Telegram `getMe` 校验 Token，并动态启动 polling；成功后设置页会显示
-   机器人的用户名和一次性管理员认领链接。
-5. 点击“打开 Telegram 绑定管理员”，在机器人私聊中点击 Start（或发送该链接），看到
-   “已绑定为管理员”后才可以使用命令。管理员认领链接只应发给自己的 Telegram 账号。
+   机器人的用户名。
+5. 在机器人私聊中发送 `/start`；首次发送者会自动绑定为管理员，看到
+   “已绑定为管理员”后才可以使用命令。
 6. 在扩展设置页保持 115 登录状态并点击“扫描目录”，让目录快照同步到 Bridge；然后在机器人中
    发送 `/dir`，用按钮选择默认保存目录。没有目录快照时，机器人会提示先打开扩展同步目录。
 
 浏览器中的扩展必须保持启用，115 登录态和 Bridge 进程也必须保持可用；Telegram 只负责查询和
 入队，实际提交 115 仍由 Chrome 扩展完成。更换 Bot Token 会清除旧管理员，连接新 Token 后
-需要重新点击认领链接。
+需要在新 Bot 私聊中再次发送 `/start`。
 
 支持的命令如下：
 
@@ -142,15 +142,16 @@ Content-Type: application/json
 | `/add <Magnet 或 ED2K>` | 将明确的 Magnet/ED2K 链接直接入队 |
 | `/jobs` | 查看本 Telegram 账号创建的任务；详情可重试失败任务或取消活动任务 |
 
-`/av`、`/anime` 和 `/add` 使用当前选择的目录；`/dir` 的按钮包含目录分页和返回上级操作。
+`/av` 和 `/anime` 默认分别使用扩展站点规则同步的 JavBus/Anime CID 与 processor；
+`/add` 使用当前选择的目录。`/dir` 的“使用当前目录”选择会覆盖该用户的站点默认，
+直到再次切换。目录索引中的“加入”只加入扩展本地保存目录列表，不创建 115 目录或立即下载。
+`/dir` 的按钮包含目录分页和返回上级操作。
 Telegram 按钮带有账号、消息和有效期校验，转发或重复点击过期按钮不会入队。
 
 ### 常见问题
 
 - **扩展提示 Bridge 不可达**：确认 `pixi run start` 的终端仍在运行，且本机 `52115` 端口
-  没有被其他进程占用；在设置页重新点击“检查 Bridge”。
-- **配对码无效或过期**：停止旧 Bridge 后重新运行 `pixi run pair`，再在设置页输入新码。
-  不要在已有 Bridge 进程运行时再启动第二个实例。
+  没有被其他进程占用；在设置页重新点击“连接本机 Bridge”。
 - **Bot 没有回应**：在设置页点击“刷新状态”，确认 Bot 已配置、polling 已启动且管理员已认领；
   检查 Token 是否完整复制自 BotFather。若 Token 泄露，应在 BotFather 撤销并换发后重新配置。
 - **`/dir` 提示没有目录**：保持 115 登录，回扩展设置页重新扫描目录，等待同步完成后再发送 `/dir`。
@@ -158,13 +159,14 @@ Telegram 按钮带有账号、消息和有效期校验，转发或重复点击�
 
 Bridge 默认没有 Telegram 配置。扩展设置页填写 Bot Token 后，Bridge 会校验并动态启动 polling；
 不再要求普通用户填写 chat/user allowlist。配置成功后，设置页会显示
-`https://t.me/<bot>?start=claim_<nonce>` 管理员认领链接；Telegram `/start` 成功后只允许该
-chat/user 使用命令。更换 Bot Token 会清除旧 owner 并要求重新认领。旧的
+Telegram `/start` 首次收到时会自动绑定当前 chat/user；成功后只允许该 chat/user 使用命令。
+更换 Bot Token 会清除旧 owner 并要求在新 Bot 中再次发送 `/start`。旧的
 `PUSH115_TELEGRAM_POLLING`、allowlist 和静态目录变量仍作为高级/兼容 fallback 保留。
 静态目录表 `PUSH115_TELEGRAM_SAVE_PATHS=CID=显示名,...` 仅作为浏览器尚未同步 registry 时的兼容 fallback。
 Bridge 不查询 115 目录，也不接收或保存 115 Cookie。
 Chrome 扩展扫描目录后，会把非敏感的路径、CID 和 revision 通过 `PUT /v1/runtime/directories`
-保存到 SQLite；Telegram 每次 `/dir`、`/add` 或候选确认都会读取最新快照，无需重启 Bridge。
+保存到 SQLite，并同步每个站点的启用状态、默认保存 CID 和 processor；Telegram 每次 `/dir`、`/add`
+或候选确认都会读取最新快照，无需重启 Bridge。
 `/dir` 使用 CID/parentCid 构成的分页目录树，每页最多展示少量子目录按钮，避免把整个 registry 一次性展开成超大的 Telegram keyboard。
 没有快照且没有静态 fallback 时，`/dir` 会提示打开扩展并同步目录。目录选择按
 chat 和 user 记忆；候选按钮点击时使用该用户最新选择的目录。`/add <Magnet|ED2K>`

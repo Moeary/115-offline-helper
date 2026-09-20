@@ -168,9 +168,67 @@ test('bridge transport uses the fixed URL, bearer header, omit credentials, and 
 	assert.equal(e.calls.length, 1)
 })
 
+test('localhost bootstrap connect stores the durable Bearer token without pairing UX', async () => {
+	const e = environment({
+		fetchHandler: async (url, request) => {
+			assert.equal(url, 'http://127.0.0.1:52115/bootstrap/connect')
+			assert.equal(request.method, 'POST')
+			assert.equal(Object.prototype.hasOwnProperty.call(request.headers, 'Authorization'), false)
+			return response({ schema: 1, connected: true, paired: true, bearerToken: 'local-durable-token-1234567890' })
+		},
+	})
+	const result = await e.client.connectBridge()
+	assert.equal(result.connected, true)
+	assert.equal(result.tokenStored, true)
+	assert.equal(e.data.push115_bridge_token, 'local-durable-token-1234567890')
+	assert.equal(e.data.push115_bridge_enabled, true)
+	assert.equal(e.data.push115_bridge_paired, true)
+})
+
+test('bridge configuration bootstrap connects an enabled extension without a stored token', async () => {
+	const e = environment({
+		data: { push115_bridge_enabled: true },
+		fetchHandler: async url => {
+			assert.equal(url, 'http://127.0.0.1:52115/bootstrap/connect')
+			return response({ schema: 1, connected: true, paired: true, bearerToken: 'startup-durable-token-1234567890' })
+		},
+	})
+	const result = await e.client.syncConfig()
+	assert.equal(result.connected, true)
+	assert.equal(result.alarm, true)
+	assert.equal(e.data.push115_bridge_token, 'startup-durable-token-1234567890')
+})
+
+test('background polling auto-connects when an enabled bridge starts later', async () => {
+	const e = environment({
+		data: { push115_bridge_enabled: true },
+		fetchHandler: async url => {
+			if (url.endsWith('/bootstrap/connect')) {
+				return response({ schema: 1, connected: true, paired: true, bearerToken: 'delayed-start-token-1234567890' })
+			}
+			return response({ schema: 1, job: null })
+		},
+	})
+	const result = await e.client.processPending()
+	assert.equal(result.bootstrap.connected, true)
+	assert.equal(e.data.push115_bridge_token, 'delayed-start-token-1234567890')
+	assert.deepEqual(e.calls.map(([url]) => new URL(url).pathname), [
+		'/bootstrap/connect',
+		'/v1/actions/claim',
+		'/v1/jobs/claim',
+	])
+})
+
 test('directory registry sync uses the authenticated loopback PUT contract', async () => {
 	const e = environment({
-		data: { push115_bridge_enabled: true, push115_bridge_token: 'secret-token' },
+		data: {
+			push115_bridge_enabled: true,
+			push115_bridge_token: 'secret-token',
+			push115_site_profiles: {
+				javbus: { enabled: true, defaultSavePathCid: '3408961516694269460', defaultProcessorProfile: 'jav' },
+				nyaa: { enabled: true, defaultSavePathCid: '3509286493732472296', defaultProcessorProfile: 'anime' },
+			},
+		},
 		fetchHandler: async () => response({ schema: 1, revision: 4 }),
 	})
 	const result = await e.client.syncDirectoryRegistry({
@@ -187,6 +245,9 @@ test('directory registry sync uses the authenticated loopback PUT contract', asy
 	assert.deepEqual(JSON.parse(e.calls[0][1].body).directories, [{
 		cid: '42', parentCid: '0', name: '影视', path: '/影视', depth: 1,
 	}])
+	const siteDefaults = JSON.parse(e.calls[0][1].body).siteDefaults
+	assert.equal(siteDefaults.javbus.savePathCid, '3408961516694269460')
+	assert.equal(siteDefaults.javbus.processorProfile, 'jav')
 })
 
 test('directory registry sync reconciles a stale local revision with the bridge', async () => {
@@ -857,6 +918,62 @@ test('cancel_task applies to the exact local task and never calls the 115 Router
 	assert.equal(e.data.push115_tasks[0].percent, undefined)
 	assert.equal(e.routerCalls.length, 0)
 	assert.equal((await e.client.readJobs())['cancel-job'].status, 'cancelled')
+})
+
+test('sync_directories action scans the requested roots and acknowledges Bridge sync', async () => {
+	const events = []
+	let scanDetails = null
+	const e = environment({
+		data: {
+			push115_bridge_enabled: true,
+			push115_bridge_token: 'secret-token',
+		},
+		fetchHandler: async (url, request) => {
+			if (url.endsWith('/v1/actions/claim')) {
+				return response({
+					schema: 1,
+					action: actionClaim('sync-action', 'sync-job', null, {
+						actionType: 'sync_directories',
+						type: 'sync_directories',
+						payload: { roots: ['0', '42'], maxDepth: 3 },
+						job: { status: 'queued' },
+					}),
+				})
+			}
+			if (url.includes('/v1/actions/sync-action/events')) {
+				events.push(JSON.parse(request.body))
+				return response({ schema: 1 })
+			}
+			if (url.endsWith('/v1/jobs/claim')) return response({ schema: 1, job: null })
+			throw new Error(`unexpected URL ${url}`)
+		},
+	})
+	e.context.Push115.Background.DirectoryIndex = {
+		scan: async details => {
+			scanDetails = details
+			return {
+				index: {
+					schema: 1,
+					revision: 8,
+					directories: [{ cid: '42', parentCid: '0', name: '影视', path: '/影视', depth: 1 }],
+				},
+				bridge: { ok: true, revision: 8 },
+				scanned: 2,
+				requests: 2,
+				complete: true,
+				truncated: false,
+			}
+		},
+	}
+
+	const result = await e.client.processPending()
+	assert.equal(result.actionId, 'sync-action')
+	assert.deepEqual(JSON.parse(JSON.stringify(scanDetails)), { roots: ['0', '42'], maxDepth: 3 })
+	assert.equal(events[0].state, 'applied')
+	assert.equal(events[0].result.scope, 'directory_index')
+	assert.equal(events[0].result.revision, 8)
+	assert.equal(events[0].result.directoryCount, 1)
+	assert.equal((await e.client.readActions())['sync-action'].status, 'applied')
 })
 
 test('cancel_task with a null taskId resolves the unique local task by bridge job ID', async () => {

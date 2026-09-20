@@ -154,6 +154,57 @@ def test_anime_search_uses_explicit_anime_intent_profile() -> None:
         store.close()
 
 
+def test_telegram_uses_synced_site_defaults_and_exact_page_code() -> None:
+    store = QueueStore(":memory:")
+    transport = FakeTransport()
+    service = TelegramService(
+        store,
+        FakeProvider(),
+        transport,
+        anime_provider=FakeAnimeProvider(),
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        clock=lambda: 50,
+    )
+    try:
+        store.set_directory_registry(
+            _telegram_registry(
+                4,
+                [
+                    {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+                    {"cid": "3408961516694269460", "parentCid": "0", "name": "AV", "path": "/AV", "depth": 1},
+                    {"cid": "3509286493732472296", "parentCid": "0", "name": "番剧", "path": "/番剧", "depth": 1},
+                ],
+                site_defaults={
+                    "javbus": {"enabled": True, "savePathCid": "3408961516694269460", "processorProfile": "jav"},
+                    "nyaa": {"enabled": True, "savePathCid": "3509286493732472296", "processorProfile": "anime"},
+                },
+            )
+        )
+        lookup = asyncio.run(service.handle_update({"message": _message("/av ABC-123")}))
+        candidate_data = transport.messages[-1][3]["inline_keyboard"][0][0]["callback_data"]
+        selected = asyncio.run(
+            service.handle_update({"callback_query": _callback(candidate_data, transport.next_id, callback_id="av")})
+        )
+        av_job = store.get_job(selected["jobId"])
+        assert av_job is not None
+        assert av_job.intent["savePathCid"] == "3408961516694269460"
+        assert av_job.intent["processorProfile"] == "jav"
+        assert av_job.intent["metadata"]["pageCode"] == "ABC-123"
+
+        anime = asyncio.run(service.handle_update({"message": _message("/anime Demo")}))
+        anime_data = transport.messages[-1][3]["inline_keyboard"][0][0]["callback_data"]
+        anime_selected = asyncio.run(
+            service.handle_update({"callback_query": _callback(anime_data, transport.next_id, callback_id="anime")})
+        )
+        anime_job = store.get_job(anime_selected["jobId"])
+        assert anime_job is not None
+        assert anime_job.intent["savePathCid"] == "3509286493732472296"
+        assert anime_job.intent["processorProfile"] == "anime"
+    finally:
+        store.close()
+
+
 def _message(text: str, *, chat_id: int = 11, user_id: int = 22, message_id: int | None = None) -> dict:
     message = {
         "chat": {"id": chat_id},
@@ -591,14 +642,22 @@ def test_cancelled_status_notification_and_same_link_can_be_added_again() -> Non
         store.close()
 
 
-def _telegram_registry(revision: int, entries: list[dict]) -> dict:
-    return {
+def _telegram_registry(
+    revision: int,
+    entries: list[dict],
+    *,
+    site_defaults: dict | None = None,
+) -> dict:
+    registry = {
         "schema": 1,
         "revision": revision,
         "scannedAt": 1700000000000 + revision,
         "roots": ["0"],
         "directories": entries,
     }
+    if site_defaults is not None:
+        registry["siteDefaults"] = site_defaults
+    return registry
 
 
 def test_telegram_reads_dynamic_registry_without_restart_and_keeps_static_fallback() -> None:

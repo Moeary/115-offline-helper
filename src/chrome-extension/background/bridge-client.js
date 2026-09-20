@@ -12,6 +12,7 @@
 	const ORIGIN = String(configApi.BRIDGE_ORIGIN || 'http://127.0.0.1:52115')
 	const HOST_PERMISSION = String(configApi.BRIDGE_HOST_PERMISSION || 'http://127.0.0.1/*')
 	const BOOTSTRAP_STATUS_PATH = String(configApi.BRIDGE_BOOTSTRAP_STATUS_PATH || '/bootstrap/status')
+	const BOOTSTRAP_CONNECT_PATH = String(configApi.BRIDGE_BOOTSTRAP_CONNECT_PATH || '/bootstrap/connect')
 	const BOOTSTRAP_PAIR_PATH = String(configApi.BRIDGE_BOOTSTRAP_PAIR_PATH || '/bootstrap/pair')
 	const TELEGRAM_RUNTIME_PATH = String(configApi.BRIDGE_TELEGRAM_RUNTIME_PATH || '/v1/runtime/telegram')
 	const ALARM_NAME = 'push115-bridge-poll'
@@ -23,7 +24,7 @@
 	const MAX_DIRECTORY_PAYLOAD_BYTES = 1024 * 1024
 	const TERMINAL_JOB_STATES = new Set(['completed', 'failed', 'uncertain', 'cancelled'])
 	const TERMINAL_ACTION_STATES = new Set(['applied', 'failed', 'uncertain', 'noop'])
-	const ACTION_TYPES = new Set(['cancel_task'])
+	const ACTION_TYPES = new Set(['cancel_task', 'sync_directories'])
 	const ACTION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 	const MAX_INT64 = 9223372036854775807n
 	const INTENT_MEDIA_TYPES = new Set(['generic', 'jav', 'anime'])
@@ -43,6 +44,7 @@
 	const BRIDGE_METADATA_BOOLEAN_KEYS = new Set(['monitorDownload'])
 	let running = false
 	let mutationChain = Promise.resolve()
+	let directorySyncChain = Promise.resolve()
 	let workerIdPromise = null
 
 	function serial(work) {
@@ -336,7 +338,39 @@
 		return Number.isSafeInteger(revision) && revision >= 0 ? revision : null
 	}
 
-	function directoryPayload(index) {
+	async function directorySiteDefaults() {
+		const profileKey = key('SITE_PROFILES', 'push115_site_profiles')
+		const savePathCidKey = key('SAVE_PATH_CID', 'push115_save_path_cid')
+		const autoDetectKey = key('AUTO_DETECT', 'push115_auto_detect')
+		const autoOrganizeKey = key('AUTO_ORGANIZE', 'push115_auto_organize')
+		const values = await getStorage([profileKey, savePathCidKey, autoDetectKey, autoOrganizeKey])
+		const legacy = {
+			[savePathCidKey]: values[savePathCidKey],
+			[autoDetectKey]: values[autoDetectKey],
+			[autoOrganizeKey]: values[autoOrganizeKey],
+		}
+		const profiles = typeof configApi.normalizeSiteProfiles === 'function'
+			? configApi.normalizeSiteProfiles(values[profileKey], legacy)
+			: values[profileKey]
+		const definitions = configApi.SITE_DEFINITIONS && typeof configApi.SITE_DEFINITIONS === 'object'
+			? Object.keys(configApi.SITE_DEFINITIONS)
+			: Object.keys(profiles || {})
+		const allowedProfiles = new Set(['generic', 'jav', 'anime'])
+		const result = {}
+		for (const siteId of definitions) {
+			const profile = profiles?.[siteId]
+			if (!profile || typeof profile !== 'object' || Array.isArray(profile)) continue
+			const processorProfile = String(profile.defaultProcessorProfile ?? profile.processorProfile ?? 'generic').trim().toLowerCase()
+			result[siteId] = {
+				enabled: profile.enabled === true,
+				savePathCid: normalizeCid(profile.defaultSavePathCid ?? profile.savePathCid, '0'),
+				processorProfile: allowedProfiles.has(processorProfile) ? processorProfile : 'generic',
+			}
+		}
+		return result
+	}
+
+	async function directoryPayload(index) {
 		const normalized = typeof background.DirectoryIndex?.normalizeIndex === 'function'
 			? background.DirectoryIndex.normalizeIndex(index)
 			: index
@@ -346,6 +380,7 @@
 			scannedAt: Number(normalized?.scannedAt) || 0,
 			roots: Array.isArray(normalized?.roots) ? normalized.roots : ['0'],
 			directories: Array.isArray(normalized?.directories) ? normalized.directories : [],
+			siteDefaults: await directorySiteDefaults(),
 		}
 		const encoded = JSON.stringify(payload)
 		const bytes = utf8ByteLength(encoded)
@@ -375,7 +410,9 @@
 		const jobEventPath = /^\/v1\/jobs\/[^\/?#]+\/events$/
 		const actionEventPath = /^\/v1\/actions\/[^\/?#]+\/events$/
 		const directoryRegistryPath = '/v1/runtime/directories'
-		const isBootstrapPath = rawPath === BOOTSTRAP_STATUS_PATH || rawPath === BOOTSTRAP_PAIR_PATH
+		const isBootstrapPath = rawPath === BOOTSTRAP_STATUS_PATH
+			|| rawPath === BOOTSTRAP_CONNECT_PATH
+			|| rawPath === BOOTSTRAP_PAIR_PATH
 		const validAuthenticatedPath = (
 			rawPath === '/v1/jobs/claim'
 			|| rawPath === '/v1/actions/claim'
@@ -493,6 +530,7 @@
 		return {
 			schema: Number(result.schema) || 1,
 			version: scrub(result.version, 64),
+			connected: result.connected === true,
 			paired: result.paired === true,
 			pairingAvailable: result.pairingAvailable === true,
 		}
@@ -507,7 +545,7 @@
 	function pairedToken(result) {
 		const token = String(result?.bearerToken || result?.token || '').trim()
 		if (!token || /\s/.test(token) || token.length > 4096) {
-			throw bridgeError('bridge 配对响应缺少有效 Bearer token', 'BRIDGE_INVALID_PAIRING_RESPONSE', { uncertain: true })
+			throw bridgeError('bridge bootstrap 响应缺少有效 Bearer token', 'BRIDGE_INVALID_PAIRING_RESPONSE', { uncertain: true })
 		}
 		return token
 	}
@@ -582,7 +620,36 @@
 		return normalizeBootstrapStatus(await requestBootstrapJson(BOOTSTRAP_STATUS_PATH, undefined, 'GET'))
 	}
 
-	async function syncStoredDirectoryAfterPair() {
+	async function connectBridge(clientId = undefined) {
+		const resolvedClientId = String(clientId || '').trim() || await workerId()
+		const result = await requestBootstrapJson(BOOTSTRAP_CONNECT_PATH, {
+			schema: 1,
+			clientId: scrub(resolvedClientId, 128),
+		}, 'POST')
+		const token = pairedToken(result)
+		await setStorage({
+			[TOKEN_KEY]: token,
+			[ENABLED_KEY]: true,
+			[PAIRED_KEY]: true,
+		})
+		let directorySync
+		try {
+			directorySync = await syncStoredDirectoryAfterBootstrap()
+		} catch (error) {
+			directorySync = { skipped: true, reason: 'directory_index_sync_failed', error: scrub(error?.message || error) }
+		}
+		// Do not return the bearer token to the options page or render it in UI.
+		return {
+			schema: Number(result?.schema) || 1,
+			connected: result?.connected !== false,
+			paired: true,
+			pairingAvailable: false,
+			tokenStored: true,
+			directorySync,
+		}
+	}
+
+	async function syncStoredDirectoryAfterBootstrap() {
 		const sync = background.DirectoryIndex?.syncStored
 		if (typeof sync === 'function') return sync()
 		const sendMessage = chrome.runtime?.sendMessage
@@ -626,7 +693,7 @@
 		})
 		let directorySync
 		try {
-			directorySync = await syncStoredDirectoryAfterPair()
+			directorySync = await syncStoredDirectoryAfterBootstrap()
 		} catch (error) {
 			directorySync = { skipped: true, reason: 'directory_index_sync_failed', error: scrub(error?.message || error) }
 		}
@@ -722,6 +789,10 @@
 			jobId,
 			leaseId,
 			actionType,
+			requestId: String(raw.requestId || '').trim(),
+			payload: raw.payload && typeof raw.payload === 'object' && !Array.isArray(raw.payload)
+				? structuredClone(raw.payload)
+				: {},
 			taskId,
 			jobStatus: normalizeClaimStatus(job?.status),
 			validationError: validationErrors[0] || null,
@@ -764,10 +835,21 @@
 		if (typeof value === 'string') return { message: scrub(value, 1024) }
 		if (!value || typeof value !== 'object' || Array.isArray(value)) return { message: scrub(value, 1024) }
 		const result = {}
-		for (const keyName of ['taskId', 'status', 'scope', 'message', 'bridgeJobStatus']) {
+		for (const keyName of [
+			'taskId', 'status', 'scope', 'message', 'bridgeJobStatus', 'reason',
+			'revision', 'directoryCount', 'scanned', 'requests',
+		]) {
 			if (value[keyName] === undefined || value[keyName] === null) continue
 			if (typeof value[keyName] !== 'string' && typeof value[keyName] !== 'number') continue
+			if (['revision', 'directoryCount', 'scanned', 'requests'].includes(keyName)) {
+				const numeric = Number(value[keyName])
+				if (Number.isSafeInteger(numeric) && numeric >= 0) result[keyName] = numeric
+				continue
+			}
 			result[keyName] = scrub(value[keyName], keyName === 'message' ? 1024 : 256)
+		}
+		for (const keyName of ['complete', 'truncated']) {
+			if (typeof value[keyName] === 'boolean') result[keyName] = value[keyName]
 		}
 		if (typeof value.localTaskFound === 'boolean') result.localTaskFound = value.localTaskFound
 		return result
@@ -984,6 +1066,68 @@
 		}
 	}
 
+	async function executeSyncDirectoriesAction(action) {
+		const scanner = background.DirectoryIndex?.scan
+		if (typeof scanner !== 'function') {
+			return {
+				state: 'failed',
+				errorCode: 'DIRECTORY_SYNC_UNAVAILABLE',
+				errorMessage: '目录同步入口不可用',
+			}
+		}
+		const payload = action.payload && typeof action.payload === 'object' ? action.payload : {}
+		const roots = Array.isArray(payload.roots)
+			? payload.roots
+			: Array.isArray(payload.rootCids)
+				? payload.rootCids
+				: ['0']
+		const rawDepth = Number(payload.maxDepth ?? payload.depth ?? 1)
+		const maxDepth = Number.isSafeInteger(rawDepth) ? Math.max(1, Math.min(32, rawDepth)) : 1
+		let scanResult
+		try {
+			scanResult = await scanner({ roots, maxDepth })
+		} catch (error) {
+			return {
+				state: 'failed',
+				errorCode: 'DIRECTORY_SYNC_FAILED',
+				errorMessage: scrub(error?.message || error, 1024),
+			}
+		}
+		const index = scanResult?.index
+		if (!index || typeof index !== 'object') {
+			return {
+				state: 'failed',
+				errorCode: 'DIRECTORY_SYNC_INVALID_RESULT',
+				errorMessage: '目录同步没有返回有效索引',
+			}
+		}
+		const bridge = scanResult?.bridge
+		if (!bridge || bridge.disabled || bridge.permission === false || bridge.ok === false) {
+			return {
+				state: 'failed',
+				errorCode: 'DIRECTORY_BRIDGE_SYNC_FAILED',
+				errorMessage: bridge?.permission === false
+					? '未获得 Bridge 本地权限，目录未同步'
+					: '目录已扫描，但未能同步到 Bridge',
+			}
+		}
+		return {
+			state: 'applied',
+			result: {
+				scope: 'directory_index',
+				status: 'synced',
+				revision: Number(index.revision) || 0,
+				directoryCount: Array.isArray(index.directories) ? index.directories.length : 0,
+				scanned: Number(scanResult.scanned) || 0,
+				requests: Number(scanResult.requests) || 0,
+				complete: scanResult.complete !== false,
+				truncated: scanResult.truncated === true,
+				reason: scanResult.reason || '',
+				message: scanResult.truncated ? '115 目录已同步（结果受预算限制）' : '115 目录已同步',
+			},
+		}
+	}
+
 	async function executeClaimedAction(action) {
 		if (!action || TERMINAL_ACTION_STATES.has(action.status)) return { skipped: true }
 		await updateAction(action.actionId, { status: 'running' })
@@ -1000,7 +1144,9 @@
 					errorMessage: '不支持的 Bridge action 类型',
 				}, { status: 'failed' })
 			}
-			const outcome = await executeCancelTaskAction(action)
+			const outcome = action.actionType === 'sync_directories'
+				? await executeSyncDirectoriesAction(action)
+				: await executeCancelTaskAction(action)
 			return enqueueActionEvent(action.actionId, outcome.state, outcome, { status: outcome.state })
 		} catch (error) {
 			return enqueueActionEvent(action.actionId, 'uncertain', {
@@ -1696,6 +1842,9 @@
 	async function ensureAlarm() {
 		const bridgeConfig = await readConfig()
 		if (!chrome.alarms?.create) return false
+		// Keep the poll alarm alive after the user enables Bridge even when the
+		// service was not running yet.  The poll path will bootstrap-connect as
+		// soon as the fixed loopback port becomes available.
 		if (bridgeConfig.enabled) {
 			const existing = chrome.alarms.get ? await chrome.alarms.get(ALARM_NAME) : null
 			if (!existing) await chrome.alarms.create(ALARM_NAME, { periodInMinutes: PERIOD_MINUTES })
@@ -1706,52 +1855,87 @@
 	}
 
 	async function syncDirectoryRegistry(index, bridgeConfig = null) {
-		const config = bridgeConfig || await readConfig()
-		if (!config.enabled || !config.token) return { disabled: true }
-		if (!await hasPermission()) return { permission: false }
-		const { payload, bytes, normalized } = directoryPayload(index)
-		let result
-		let reconciled = false
-		try {
-			result = await requestJson('/v1/runtime/directories', payload, config.token, 'PUT')
-		} catch (error) {
-			if (error?.code !== 'HTTP_409') throw error
-			// The extension's local storage can be reset independently from the
-			// bridge database (for example after reinstalling the extension).  A
-			// stale/conflicting local revision must recover instead of requiring
-			// the counter to catch up one scan at a time.
-			const remote = await requestJson('/v1/runtime/directories', undefined, config.token, 'GET')
-			const remoteRevision = directoryRevision(remote)
-			if (remoteRevision === null || remoteRevision >= Number.MAX_SAFE_INTEGER) {
-				throw bridgeError('bridge directory registry revision 无法自愈', 'BRIDGE_DIRECTORY_REVISION_UNSAFE', { uncertain: true })
+		// Directory scans and the service-worker storage listener can request the
+		// same registry concurrently.  Serialize the complete PUT/409-reconcile
+		// sequence so two callers never race the revision counter.
+		const work = directorySyncChain.catch(() => {}).then(async () => {
+			const config = bridgeConfig || await readConfig()
+			if (!config.enabled || !config.token) return { disabled: true }
+			if (!await hasPermission()) return { permission: false }
+			const { payload, bytes, normalized } = await directoryPayload(index)
+			let result
+			let reconciled = false
+			try {
+				result = await requestJson('/v1/runtime/directories', payload, config.token, 'PUT')
+			} catch (error) {
+				if (error?.code !== 'HTTP_409') throw error
+				// The extension's local storage can be reset independently from the
+				// bridge database (for example after reinstalling the extension).  A
+				// stale/conflicting local revision must recover instead of requiring
+				// the counter to catch up one scan at a time.
+				const remote = await requestJson('/v1/runtime/directories', undefined, config.token, 'GET')
+				const remoteRevision = directoryRevision(remote)
+				if (remoteRevision === null || remoteRevision >= Number.MAX_SAFE_INTEGER) {
+					throw bridgeError('bridge directory registry revision 无法自愈', 'BRIDGE_DIRECTORY_REVISION_UNSAFE', { uncertain: true })
+				}
+				const retryPayload = { ...payload, revision: remoteRevision + 1 }
+				const retryBytes = utf8ByteLength(JSON.stringify(retryPayload))
+				if (retryBytes > MAX_DIRECTORY_PAYLOAD_BYTES) {
+					throw bridgeError(
+						`目录 registry 请求体过大（${retryBytes} bytes，限制 ${MAX_DIRECTORY_PAYLOAD_BYTES} bytes）`,
+						'BRIDGE_DIRECTORY_PAYLOAD_TOO_LARGE',
+					)
+				}
+				result = await requestJson('/v1/runtime/directories', retryPayload, config.token, 'PUT')
+				reconciled = true
 			}
-			const retryPayload = { ...payload, revision: remoteRevision + 1 }
-			const retryBytes = utf8ByteLength(JSON.stringify(retryPayload))
-			if (retryBytes > MAX_DIRECTORY_PAYLOAD_BYTES) {
-				throw bridgeError(
-					`目录 registry 请求体过大（${retryBytes} bytes，限制 ${MAX_DIRECTORY_PAYLOAD_BYTES} bytes）`,
-					'BRIDGE_DIRECTORY_PAYLOAD_TOO_LARGE',
-				)
+			if (!result || result.schema !== 1) throw bridgeError('目录 registry 响应格式无效', 'BRIDGE_INVALID_DIRECTORY_REGISTRY', { uncertain: true })
+			const serverRevision = directoryRevision(result)
+			if (serverRevision !== null && serverRevision > Number(normalized?.revision || 0)) {
+				await persistDirectoryRevision(normalized, serverRevision)
 			}
-			result = await requestJson('/v1/runtime/directories', retryPayload, config.token, 'PUT')
-			reconciled = true
-		}
-		if (!result || result.schema !== 1) throw bridgeError('目录 registry 响应格式无效', 'BRIDGE_INVALID_DIRECTORY_REGISTRY', { uncertain: true })
-		const serverRevision = directoryRevision(result)
-		if (serverRevision !== null && serverRevision > Number(normalized?.revision || 0)) {
-			await persistDirectoryRevision(normalized, serverRevision)
-		}
-		return { ...result, bytes, reconciled }
+			return { ...result, bytes, reconciled }
+		})
+		directorySyncChain = work.catch(() => {})
+		return work
 	}
 
 	async function processPending() {
 		if (running) return { skipped: true, running: true }
 		running = true
 		try {
-			const bridgeConfig = await readConfig()
-			if (!bridgeConfig.enabled || !bridgeConfig.token) return { disabled: true }
+			let bridgeConfig = await readConfig()
+			if (!bridgeConfig.enabled) return { disabled: true }
 			if (!await hasPermission()) return { permission: false }
 			const result = {}
+			if (!bridgeConfig.token) {
+				try {
+					result.bootstrap = await connectBridge()
+					bridgeConfig = await readConfig()
+				} catch (error) {
+					// Keep the alarm alive: starting the local service later must be
+					// enough for the next poll to connect without a manual button click.
+					result.bootstrapError = errorCode(error, 'BRIDGE_BOOTSTRAP_FAILED')
+					return result
+				}
+			}
+			if (!bridgeConfig.token) return { ...result, disabled: true }
+			// A bridge restart or a machine wake-up can leave the server with an
+			// older directory snapshot.  Reconcile it on the first successful poll;
+			// idempotent PUTs are accepted by the bridge and do not bump revisions.
+			try {
+				const syncStored = background.DirectoryIndex?.syncStored
+				if (typeof syncStored === 'function') {
+					const directory = await syncStored()
+					if (directory?.bridge?.ok === false) result.directorySyncError = scrub(directory.bridge.error || '目录同步失败')
+					else if (directory?.bridge?.ok === true) result.directorySync = {
+						revision: Number(directory.index?.revision) || 0,
+						count: Array.isArray(directory.index?.directories) ? directory.index.directories.length : 0,
+					}
+				}
+			} catch (error) {
+				result.directorySyncError = scrub(error?.message || error)
+			}
 			// Action receipts and job receipts use independent durable outboxes. A
 			// failure in one poll must not prevent the other side from progressing.
 			try {
@@ -1800,7 +1984,16 @@
 	}
 
 	async function syncConfig() {
-		return ensureAlarm()
+		const bridgeConfig = await readConfig()
+		let bootstrap = null
+		if (bridgeConfig.enabled && !bridgeConfig.token && await hasPermission()) {
+			try {
+				bootstrap = await connectBridge()
+			} catch (error) {
+				return { connected: false, error: errorCode(error, 'BRIDGE_BOOTSTRAP_FAILED'), alarm: await ensureAlarm() }
+			}
+		}
+		return { ...(bootstrap || {}), alarm: await ensureAlarm() }
 	}
 
 	async function resetRuntime() {
@@ -1823,6 +2016,7 @@
 		ORIGIN,
 		HOST_PERMISSION,
 		BOOTSTRAP_STATUS_PATH,
+		BOOTSTRAP_CONNECT_PATH,
 		BOOTSTRAP_PAIR_PATH,
 		TELEGRAM_RUNTIME_PATH,
 		ALARM_NAME,
@@ -1840,6 +2034,7 @@
 		requestBootstrapJson,
 		bootstrapStatus,
 		getBootstrapStatus: bootstrapStatus,
+		connectBridge,
 		pairBridge,
 		pair: pairBridge,
 		getTelegramStatus,

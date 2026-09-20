@@ -271,6 +271,41 @@ def test_directory_registry_accepts_aliases_and_preserves_bounded_entries() -> N
     assert registry.model_dump(by_alias=True)["scannedAt"] == 1700000000000
 
 
+def test_directory_registry_accepts_site_defaults_with_strict_cids_and_profiles() -> None:
+    registry = DirectoryRegistryRequest.model_validate(
+        _directory_registry(
+            siteDefaults={
+                "javbus": {
+                    "enabled": True,
+                    "savePathCid": "3408961516694269460",
+                    "processorProfile": "jav",
+                },
+                "nyaa": {
+                    "enabled": True,
+                    "savePathCid": "3509286493732472296",
+                    "processorProfile": "anime",
+                },
+            }
+        )
+    )
+    assert registry.site_defaults is not None
+    assert registry.site_defaults["javbus"].save_path_cid == "3408961516694269460"
+    assert registry.model_dump(by_alias=True)["siteDefaults"]["nyaa"]["processorProfile"] == "anime"
+
+    with pytest.raises(Exception):
+        DirectoryRegistryRequest.model_validate(
+            _directory_registry(
+                siteDefaults={
+                    "JavBus": {
+                        "enabled": True,
+                        "savePathCid": "1",
+                        "processorProfile": "jav",
+                    }
+                }
+            )
+        )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

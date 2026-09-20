@@ -2302,18 +2302,18 @@ class QueueStore:
             return None
         try:
             value = json.loads(raw)
-            from .schemas import DirectoryRegistryRequest
+            from .schemas import DirectoryRegistryRequest, dump_directory_registry
 
             validated = DirectoryRegistryRequest.model_validate(value)
             encoded = json.dumps(
-                validated.model_dump(by_alias=True),
+                dump_directory_registry(validated),
                 ensure_ascii=False,
                 separators=(",", ":"),
                 allow_nan=False,
             ).encode("utf-8")
             if len(encoded) > _DIRECTORY_REGISTRY_MAX_BYTES:
                 return None
-            return validated.model_dump(by_alias=True)
+            return dump_directory_registry(validated)
         except (TypeError, ValueError, OverflowError, UnicodeError, json.JSONDecodeError):
             return None
 
@@ -2323,13 +2323,13 @@ class QueueStore:
         """Validate and durably replace the browser directory snapshot."""
 
         try:
-            from .schemas import DirectoryRegistryRequest
+            from .schemas import DirectoryRegistryRequest, dump_directory_registry
 
             if isinstance(registry, DirectoryRegistryRequest):
                 validated = registry
             else:
                 validated = DirectoryRegistryRequest.model_validate(registry)
-            value = validated.model_dump(by_alias=True)
+            value = dump_directory_registry(validated)
             encoded = json.dumps(
                 value,
                 ensure_ascii=False,

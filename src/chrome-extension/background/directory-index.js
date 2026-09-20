@@ -193,9 +193,14 @@
 	}
 
 	async function syncStored() {
-		const index = await read()
-		if (!index.directories.length && index.revision === 0) return { index, skipped: true, reason: 'empty' }
-		return { index, bridge: await syncBridge(index) }
+		// Keep a stored sync behind an active scan.  Otherwise a site-profile
+		// storage event can upload the previous revision while a scan is still
+		// writing the new one, producing avoidable 409 conflicts.
+		return enqueueScan(async () => {
+			const index = await read()
+			if (!index.directories.length && index.revision === 0) return { index, skipped: true, reason: 'empty' }
+			return { index, bridge: await syncBridge(index) }
+		})
 	}
 
 	async function scan(details = {}) {

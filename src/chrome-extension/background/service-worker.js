@@ -44,6 +44,11 @@ chrome.alarms.onAlarm.addListener(alarm => {
 chrome.storage.onChanged.addListener((changes, area) => {
 	if (area !== 'local') return
 	if (changes[configKeys.AUTO_DETECT] || changes[configKeys.SITE_PROFILES]) void background.ContentScripts.sync()
+	if (changes[configKeys.SITE_PROFILES]
+		|| changes[configKeys.SAVE_PATH_LIST]
+		|| changes[configKeys.SAVE_PATH_CID]) {
+		void background.DirectoryIndex.syncStored()
+	}
 	if (changes[configKeys.BRIDGE_ENABLED] || changes[configKeys.BRIDGE_TOKEN] || changes[configKeys.BRIDGE_TARGET_CID]) {
 		void background.BridgeClient.syncConfig()
 		if (changes[configKeys.BRIDGE_ENABLED]?.newValue === true || changes[configKeys.BRIDGE_TOKEN]?.newValue) {

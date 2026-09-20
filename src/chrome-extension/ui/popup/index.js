@@ -42,6 +42,14 @@ const I18N_STRINGS = {
 		manual_download_label: '手动添加 Magnet / ED2K',
 		manual_download_placeholder: '每行一个 magnet: 或 ed2k:',
 		manual_download_continue: '继续确认',
+		quick_add_title: '快速添加任务',
+		quick_add_hint: '粘贴链接后继续确认，站点规则和处理方式可在高级设置中统一维护。',
+		local_badge: '本地',
+		recent_tasks_hint: '只展示最近几项，完整日志和失败重试在高级设置页。',
+		quick_options_title: '快速选项',
+		quick_options_hint: '常用选项即时保存；更多规则请打开高级设置。',
+		safe_cleanup_hint: '仅处理明确安全的候选文件',
+		preferences_title: '界面偏好',
 		tab_home: '主页',
 		tab_settings: '设置',
 		save_path_label: '默认保存目录:',
@@ -91,6 +99,14 @@ const I18N_STRINGS = {
 		manual_download_label: 'Add Magnet / ED2K manually',
 		manual_download_placeholder: 'One magnet: or ed2k: link per line',
 		manual_download_continue: 'Continue',
+		quick_add_title: 'Quick add',
+		quick_add_hint: 'Paste links and confirm; site rules and processing stay managed in Advanced settings.',
+		local_badge: 'Local',
+		recent_tasks_hint: 'Showing recent items; full logs and retry controls are in Advanced settings.',
+		quick_options_title: 'Quick options',
+		quick_options_hint: 'Common options save instantly; open Advanced settings for more rules.',
+		safe_cleanup_hint: 'Only clearly safe candidates are processed',
+		preferences_title: 'Interface preferences',
 		tab_home: 'Home',
 		tab_settings: 'Settings',
 		save_path_label: 'Default Save Directory:',
@@ -362,7 +378,6 @@ function renderTaskManager(tasks = []) {
 
 function renderTaskViews(tasks = []) {
 	renderTaskList(tasks)
-	renderTaskManager(tasks)
 }
 
 async function refreshTaskList() {
@@ -381,39 +396,70 @@ function applyTheme(theme) {
 	}
 }
 
+function setText(id, value) {
+	const element = document.getElementById(id)
+	if (element) element.textContent = value
+}
+
+function setPlaceholder(id, value) {
+	const element = document.getElementById(id)
+	if (element) element.placeholder = value
+}
+
+function setValue(id, value) {
+	const element = document.getElementById(id)
+	if (element) element.value = value
+}
+
+function setChecked(id, value) {
+	const element = document.getElementById(id)
+	if (element) element.checked = value === true
+}
+
 function applyLocale() {
-	// Update all text elements
-	document.getElementById('push115-title-text').textContent = t('panel_title')
-	document.getElementById('label-manual-download').textContent = t('manual_download_label')
-	document.getElementById('push115-manual-downloads').placeholder = t('manual_download_placeholder')
-	document.getElementById('push115-open-download-confirmation').textContent = t('manual_download_continue')
-	document.querySelector('[data-tab="home"]').textContent = t('tab_home')
-	document.querySelector('[data-tab="tasks"]').textContent = t('tab_tasks')
-	document.querySelector('[data-tab="settings"]').textContent = t('tab_settings')
-	document.getElementById('label-save-path').textContent = t('save_path_label')
-	document.getElementById('hint-cid').textContent = t('cid_hint')
-	document.getElementById('label-save-dirs').textContent = t('settings_save_dirs_label')
-	document.getElementById('push115-save-dirs-input').placeholder = t('save_dirs_placeholder')
-	document.getElementById('hint-save-dirs').textContent = t('save_dirs_hint')
-	document.getElementById('label-auto-delete').textContent = t('auto_delete_label')
-	document.getElementById('label-delete-pre').textContent = t('delete_size_label_pre')
-	document.getElementById('label-delete-post').textContent = t('delete_size_label_post')
-	document.getElementById('hint-delete-safe').textContent = t('delete_safe_hint')
-	document.getElementById('label-auto-organize').textContent = t('auto_organize_label')
-	document.getElementById('hint-organize').textContent = t('organize_hint')
-	document.getElementById('label-auto-detect').textContent = t('auto_detect_label')
-	document.getElementById('hint-auto-detect').textContent = t('auto_detect_hint')
+	// Update all visible text elements.  The popup is intentionally a single
+	// page now; optional setters keep older or compact markup harmless.
+	setText('push115-title-text', t('panel_title'))
+	setText('label-manual-download', t('manual_download_label'))
+	setPlaceholder('push115-manual-downloads', t('manual_download_placeholder'))
+	setText('push115-open-download-confirmation', t('manual_download_continue'))
+	setText('push115-quick-add-title', t('quick_add_title'))
+	setText('push115-quick-add-hint', t('quick_add_hint'))
+	setText('push115-local-badge', t('local_badge'))
+	setText('push115-recent-tasks-hint', t('recent_tasks_hint'))
+	setText('push115-quick-options-title', t('quick_options_title'))
+	setText('push115-quick-options-hint', t('quick_options_hint'))
+	setText('hint-safe-cleanup', t('safe_cleanup_hint'))
+	setText('push115-preferences-title', t('preferences_title'))
+	setText('label-save-path', t('save_path_label'))
+	setText('hint-cid', t('cid_hint'))
+	setText('label-save-dirs', t('settings_save_dirs_label'))
+	setPlaceholder('push115-save-dirs-input', t('save_dirs_placeholder'))
+	setText('hint-save-dirs', t('save_dirs_hint'))
+	setText('label-auto-delete', t('auto_delete_label'))
+	setText('label-delete-pre', t('delete_size_label_pre'))
+	setText('label-delete-post', t('delete_size_label_post'))
+	setText('hint-delete-safe', t('delete_safe_hint'))
+	setText('label-auto-organize', t('auto_organize_label'))
+	setText('hint-organize', t('organize_hint'))
+	setText('label-auto-detect', t('auto_detect_label'))
+	setText('hint-auto-detect', t('auto_detect_hint'))
 	setBtnContent('push115-check-login', 'icons/check.png', t('check_login_text'))
 	setBtnContent('push115-login-btn', 'icons/115.png', t('login_btn'))
-	document.getElementById('label-background-tasks').textContent = t('background_tasks_label')
-	document.getElementById('push115-open-task-manager').textContent = t('open_task_manager')
-	document.getElementById('label-task-manager').textContent = t('tab_tasks')
-	document.getElementById('hint-task-manager').textContent = t('manage_tasks_hint')
-	document.getElementById('push115-refresh-tasks').textContent = t('refresh_tasks')
-	document.getElementById('push115-open-options').textContent = t('open_options')
-	document.getElementById('hint-open-options').textContent = t('open_options_hint')
-	document.getElementById('push115-open-options-from-tasks').textContent = t('open_options')
-	document.getElementById('hint-options-from-tasks').textContent = t('open_options_hint')
+	setText('label-background-tasks', t('background_tasks_label'))
+	setText('push115-open-task-manager', t('open_task_manager'))
+	setText('label-task-manager', t('tab_tasks'))
+	setText('hint-task-manager', t('manage_tasks_hint'))
+	setText('push115-refresh-tasks', t('refresh_tasks'))
+	setText('push115-open-options', t('open_options'))
+	setText('hint-open-options', t('open_options_hint'))
+	setText('push115-open-options-from-tasks', t('open_options'))
+	setText('hint-options-from-tasks', t('open_options_hint'))
+	setText('push115-language-label', t('settings_language_label'))
+	setText('push115-theme-label', t('settings_theme_label'))
+	setText('push115-theme-option-auto', t('theme_auto'))
+	setText('push115-theme-option-light', t('theme_light'))
+	setText('push115-theme-option-dark', t('theme_dark'))
 
 	renderSaveDirSelect()
 	void refreshTaskList()
@@ -457,19 +503,18 @@ async function init() {
 	applyTheme(getConfig(CONFIG_KEYS.THEME))
 	applyLocale()
 
-	document.getElementById('push115-auto-organize').checked = getConfig(CONFIG_KEYS.AUTO_ORGANIZE)
-	document.getElementById('push115-auto-delete').checked = getConfig(CONFIG_KEYS.AUTO_DELETE_SMALL)
-	document.getElementById('push115-delete-size').value = getConfig(CONFIG_KEYS.DELETE_SIZE_THRESHOLD)
-	document.getElementById('push115-language-select').value = getConfig(CONFIG_KEYS.I18N_LOCALE)
-	document.getElementById('push115-theme-select').value = getConfig(CONFIG_KEYS.THEME)
-	document.getElementById('push115-save-dirs-input').value = getConfig(CONFIG_KEYS.SAVE_PATH_LIST)
-	document.getElementById('push115-auto-detect').checked = getConfig(CONFIG_KEYS.AUTO_DETECT)
+	setChecked('push115-auto-organize', getConfig(CONFIG_KEYS.AUTO_ORGANIZE))
+	setChecked('push115-auto-delete', getConfig(CONFIG_KEYS.AUTO_DELETE_SMALL))
+	setValue('push115-delete-size', getConfig(CONFIG_KEYS.DELETE_SIZE_THRESHOLD))
+	setValue('push115-language-select', getConfig(CONFIG_KEYS.I18N_LOCALE))
+	setValue('push115-theme-select', getConfig(CONFIG_KEYS.THEME))
+	setValue('push115-save-dirs-input', getConfig(CONFIG_KEYS.SAVE_PATH_LIST))
+	setChecked('push115-auto-detect', getConfig(CONFIG_KEYS.AUTO_DETECT))
 	renderSaveDirSelect()
 	await refreshTaskList()
 
-	if (getConfig(CONFIG_KEYS.AUTO_DELETE_SMALL)) {
-		document.getElementById('push115-delete-section').style.display = 'block'
-	}
+	const deleteSection = document.getElementById('push115-delete-section')
+	if (deleteSection) deleteSection.style.display = getConfig(CONFIG_KEYS.AUTO_DELETE_SMALL) ? 'block' : 'none'
 
 	// Bind events
 	bindEvents()
@@ -480,22 +525,13 @@ async function init() {
 	void sendMessage('INJECT_ACTIVE_TAB').catch(() => {})
 }
 
-function activateTab(tabName) {
-	document.querySelectorAll('.push115-tab').forEach(tab => tab.classList.remove('active'))
-	document.querySelectorAll('.push115-tab-content').forEach(content => content.classList.remove('active'))
-	const tab = document.querySelector(`.push115-tab[data-tab="${tabName}"]`)
-	const content = document.getElementById(`push115-tab-${tabName}`)
-	if (tab) tab.classList.add('active')
-	if (content) content.classList.add('active')
+function onElement(id, event, handler) {
+	const element = document.getElementById(id)
+	if (element) element.addEventListener(event, handler)
 }
 
 function bindEvents() {
-	// Tab switching
-	document.querySelectorAll('.push115-tab').forEach(tab => {
-		tab.addEventListener('click', () => activateTab(tab.dataset.tab))
-	})
-
-	document.getElementById('push115-open-download-confirmation').addEventListener('click', () => {
+	onElement('push115-open-download-confirmation', 'click', () => {
 		const initialText = document.getElementById('push115-manual-downloads').value
 		const genericProfile = configCache[CONFIG_KEYS.SITE_PROFILES]?.generic || {}
 		void Push115.Content.ConfirmModal.show({
@@ -507,31 +543,26 @@ function bindEvents() {
 		})
 	})
 
-	// Theme
-	document.getElementById('push115-theme-select').addEventListener('change', e => {
+	onElement('push115-theme-select', 'change', e => {
 		setConfig(CONFIG_KEYS.THEME, e.target.value)
 		applyTheme(e.target.value)
 	})
 
-	// Language
-	document.getElementById('push115-language-select').addEventListener('change', e => {
+	onElement('push115-language-select', 'change', e => {
 		setConfig(CONFIG_KEYS.I18N_LOCALE, e.target.value)
 		applyLocale()
 	})
 
-	// Save directory list config
-	document.getElementById('push115-save-dirs-input').addEventListener('change', e => {
+	onElement('push115-save-dirs-input', 'change', e => {
 		setConfig(CONFIG_KEYS.SAVE_PATH_LIST, e.target.value)
 		renderSaveDirSelect()
 	})
 
-	// Auto organize
-	document.getElementById('push115-auto-organize').addEventListener('change', e => {
+	onElement('push115-auto-organize', 'change', e => {
 		setConfig(CONFIG_KEYS.AUTO_ORGANIZE, e.target.checked)
 	})
 
-	// Auto detect toggle
-	document.getElementById('push115-auto-detect').addEventListener('change', async e => {
+	onElement('push115-auto-detect', 'change', async e => {
 		const checkbox = e.target
 		if (checkbox.checked) {
 			try {
@@ -567,18 +598,17 @@ function bindEvents() {
 		}
 	})
 
-	// Auto delete
-	document.getElementById('push115-auto-delete').addEventListener('change', e => {
+	onElement('push115-auto-delete', 'change', e => {
 		setConfig(CONFIG_KEYS.AUTO_DELETE_SMALL, e.target.checked)
-		document.getElementById('push115-delete-section').style.display = e.target.checked ? 'block' : 'none'
+		const section = document.getElementById('push115-delete-section')
+		if (section) section.style.display = e.target.checked ? 'block' : 'none'
 	})
 
-	document.getElementById('push115-delete-size').addEventListener('change', e => {
+	onElement('push115-delete-size', 'change', e => {
 		setConfig(CONFIG_KEYS.DELETE_SIZE_THRESHOLD, e.target.value)
 	})
 
-	// Save directory
-	document.getElementById('push115-save-dir-select').addEventListener('change', e => {
+	onElement('push115-save-dir-select', 'change', e => {
 		const cid = Push115.PathUtils.normalizeCid(e.target.value) || '0'
 		const listText = getConfig(CONFIG_KEYS.SAVE_PATH_LIST) || ''
 		const found = Push115.PathUtils.findPathByCid(listText, cid)
@@ -587,9 +617,9 @@ function bindEvents() {
 		renderSaveDirSelect()
 	})
 
-	// Check Login
-	document.getElementById('push115-check-login').addEventListener('click', async () => {
+	onElement('push115-check-login', 'click', async () => {
 		const btn = document.getElementById('push115-check-login')
+		if (!btn) return
 		btn.disabled = true
 		setBtnContent('push115-check-login', 'icons/check.png', t('processing'))
 		try {
@@ -606,23 +636,20 @@ function bindEvents() {
 		setBtnContent('push115-check-login', 'icons/check.png', t('check_login_text'))
 	})
 
-	// Login Button - open modal
-	document.getElementById('push115-login-btn').addEventListener('click', () => {
+	onElement('push115-login-btn', 'click', () => {
 		showLoginModal()
 	})
 
-	// Open the in-popup task manager from the Home tab
-	document.getElementById('push115-open-task-manager').addEventListener('click', () => {
-		activateTab('tasks')
-	})
-
-	document.getElementById('push115-refresh-tasks').addEventListener('click', refreshTaskList)
-
-	// Full settings and logs page
-	document.getElementById('push115-open-options').addEventListener('click', () => {
+	onElement('push115-open-task-manager', 'click', () => {
 		chrome.runtime.openOptionsPage()
 	})
-	document.getElementById('push115-open-options-from-tasks').addEventListener('click', () => {
+
+	onElement('push115-refresh-tasks', 'click', refreshTaskList)
+
+	onElement('push115-open-options', 'click', () => {
+		chrome.runtime.openOptionsPage()
+	})
+	onElement('push115-open-options-from-tasks', 'click', () => {
 		chrome.runtime.openOptionsPage()
 	})
 }

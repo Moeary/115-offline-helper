@@ -40,6 +40,7 @@
 	const BRIDGE_BASE_URL = 'http://127.0.0.1:52115'
 	const BRIDGE_ORIGIN = 'http://127.0.0.1:52115'
 	const BRIDGE_BOOTSTRAP_STATUS_PATH = '/bootstrap/status'
+	const BRIDGE_BOOTSTRAP_CONNECT_PATH = '/bootstrap/connect'
 	const BRIDGE_BOOTSTRAP_PAIR_PATH = '/bootstrap/pair'
 	const BRIDGE_TELEGRAM_RUNTIME_PATH = '/v1/runtime/telegram'
 	// Chrome match patterns are host based; the transport itself still checks
@@ -308,6 +309,7 @@
 		BRIDGE_BASE_URL,
 		BRIDGE_ORIGIN,
 		BRIDGE_BOOTSTRAP_STATUS_PATH,
+		BRIDGE_BOOTSTRAP_CONNECT_PATH,
 		BRIDGE_BOOTSTRAP_PAIR_PATH,
 		BRIDGE_TELEGRAM_RUNTIME_PATH,
 		BRIDGE_HOST_PERMISSION,

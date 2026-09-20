@@ -852,3 +852,475 @@ body.dark-theme .push115-qrcode-status {
 body.dark-theme .push115-qrcode-tip {
   color: #888;
 }
+
+/* Single-page popup layout.  The popup now presents one focused flow:
+   add a link, inspect recent tasks, use quick options, then open advanced
+   settings for the full configuration and logs. */
+.push115-single-page {
+  min-height: 100%;
+}
+
+/* Give the focused popup enough horizontal room for directory controls and
+   task summaries; the narrow media query below still fits compact windows. */
+body {
+  width: 420px;
+  min-height: 300px;
+  max-width: 100vw;
+}
+
+.push115-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.push115-brand > div {
+  display: grid;
+  gap: 2px;
+}
+
+.push115-brand strong {
+  font-size: 15px;
+  letter-spacing: -0.2px;
+}
+
+.push115-brand span {
+  color: #86868b;
+  font-size: 10px;
+}
+
+.push115-content {
+  max-height: 660px;
+  overflow-y: auto;
+  padding: 14px;
+  background: #f5f5f7;
+}
+
+.push115-card {
+  padding: 14px;
+  margin-bottom: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.04);
+}
+
+.push115-card:last-child {
+  margin-bottom: 0;
+}
+
+.push115-card-heading,
+.push115-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.push115-card-heading h1,
+.push115-section-heading h2 {
+  margin: 0;
+  color: #1d1d1f;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.push115-card-heading p,
+.push115-section-heading p {
+  margin: 4px 0 0;
+  color: #86868b;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.push115-card-badge {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(0, 122, 255, 0.1);
+  color: #007aff;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.push115-inline-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+
+.push115-icon-btn,
+.push115-link-btn {
+  border: 0;
+  background: transparent;
+  color: #007aff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.push115-icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.push115-icon-btn:hover,
+.push115-link-btn:hover {
+  background: rgba(0, 122, 255, 0.1);
+}
+
+.push115-link-btn {
+  padding: 5px 7px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.push115-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.push115-quick-grid-bottom {
+  margin-top: 12px;
+}
+
+.push115-toggle-card,
+.push115-checkbox-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.push115-toggle-card span,
+.push115-checkbox-line span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.push115-toggle-card strong,
+.push115-checkbox-line strong {
+  color: #1d1d1f;
+  font-size: 12px;
+}
+
+.push115-toggle-card small,
+.push115-checkbox-line small {
+  color: #86868b;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.push115-popup-preferences {
+  margin: 0 2px 8px;
+  color: #6e6e73;
+  font-size: 11px;
+}
+
+.push115-popup-preferences summary {
+  cursor: pointer;
+  padding: 6px 4px;
+}
+
+.push115-popup-preferences .push115-quick-grid {
+  margin: 6px 0;
+}
+
+.push115-field {
+  display: grid;
+  gap: 5px;
+  color: #6e6e73;
+  font-size: 11px;
+}
+
+.push115-delete-inline {
+  padding-top: 10px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+body.dark-theme .push115-content {
+  background: #17191d;
+}
+
+body.dark-theme .push115-card {
+  border-color: #3b3d42;
+  background: #24262a;
+  box-shadow: none;
+}
+
+body.dark-theme .push115-card-heading h1,
+body.dark-theme .push115-section-heading h2,
+body.dark-theme .push115-toggle-card strong,
+body.dark-theme .push115-checkbox-line strong {
+  color: #f5f5f7;
+}
+
+body.dark-theme .push115-toggle-card,
+body.dark-theme .push115-checkbox-line,
+body.dark-theme .push115-delete-inline {
+  border-color: #3b3d42;
+}
+
+body.dark-theme .push115-input,
+body.dark-theme .push115-select,
+body.dark-theme .push115-textarea {
+  border-color: #4a4c52;
+  background: #2d2f33;
+  color: #f5f5f7;
+}
+
+body.dark-theme .push115-header {
+  border-color: #383a3f;
+  background: #202226;
+}
+
+body.dark-theme .push115-header-title,
+body.dark-theme .push115-brand strong {
+  color: #f5f5f7;
+}
+
+body.dark-theme .push115-popup-preferences,
+body.dark-theme .push115-field {
+  color: #a1a1a6;
+}
+
+@media (max-width: 380px) {
+  body { width: 100%; }
+  .push115-content { padding: 10px; }
+  .push115-card { padding: 12px; }
+  .push115-quick-grid { grid-template-columns: 1fr; }
+}
+
+/* Final popup pass: Chrome sizes action popups from the root document.  The
+   previous body-only width was ignored by some Chromium builds, leaving the
+   card in a narrow ~300px column and wrapping every Chinese character. */
+html,
+body {
+  width: 520px !important;
+  min-width: 520px !important;
+  max-width: none !important;
+}
+
+body {
+  min-height: 420px;
+  background: #f2f5f9;
+}
+
+.push115-panel {
+  width: 520px;
+  min-height: 420px;
+  background: #f2f5f9;
+}
+
+.push115-header {
+  min-height: 76px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(31, 41, 55, 0.12);
+  background: #ffffff;
+}
+
+.push115-header-btns {
+  gap: 6px;
+}
+
+.push115-header-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(31, 41, 55, 0.1);
+  background: #f5f7fa;
+}
+
+.push115-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(210px, 0.85fr);
+  grid-auto-flow: row;
+  align-items: start;
+  gap: 14px;
+  max-height: 760px;
+  padding: 16px;
+  overflow-y: auto;
+  background: #f2f5f9;
+}
+
+#push115-status-area,
+#push115-progress {
+  grid-column: 1 / -1;
+}
+
+.push115-manual-card {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 286px;
+}
+
+.push115-quick-card {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 286px;
+}
+
+.push115-task-section {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+
+.push115-popup-preferences {
+  grid-column: 1 / -1;
+  grid-row: 4;
+}
+
+.push115-card {
+  margin: 0;
+  padding: 17px;
+  border: 1px solid #dce2ea;
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(31, 41, 55, 0.06);
+}
+
+.push115-card-heading,
+.push115-section-heading {
+  margin-bottom: 15px;
+}
+
+.push115-card-heading h1,
+.push115-section-heading h2 {
+  color: #172033;
+  font-size: 17px;
+  letter-spacing: -0.2px;
+}
+
+.push115-card-heading p,
+.push115-section-heading p {
+  max-width: 330px;
+  color: #748096;
+  font-size: 12px;
+}
+
+.push115-card-badge {
+  padding: 5px 9px;
+  background: #e8f1ff;
+  color: #1769d2;
+  font-size: 11px;
+}
+
+.push115-textarea {
+  min-height: 150px;
+  border-color: #d5dce6;
+  border-radius: 11px;
+  background: #f8fafc;
+  color: #172033;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.push115-select,
+.push115-input {
+  min-height: 40px;
+  border-color: #d5dce6;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #172033;
+}
+
+.push115-btn {
+  min-height: 40px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.push115-btn-primary {
+  box-shadow: 0 5px 12px rgba(0, 122, 255, 0.2);
+}
+
+.push115-quick-grid {
+  gap: 10px;
+}
+
+.push115-toggle-card,
+.push115-checkbox-line {
+  padding: 10px;
+  border-color: #dce2ea;
+  background: #f8fafc;
+}
+
+.push115-task-list {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+body.dark-theme,
+body.dark-theme .push115-panel {
+  background: #11151c;
+}
+
+body.dark-theme .push115-header {
+  border-color: #303846;
+  background: #171c25;
+}
+
+body.dark-theme .push115-header-btn {
+  border-color: #354052;
+  background: #202733;
+  color: #cbd5e1;
+}
+
+body.dark-theme .push115-content {
+  background: #11151c;
+}
+
+body.dark-theme .push115-card {
+  border-color: #303846;
+  background: #1a202a;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+}
+
+body.dark-theme .push115-card-heading h1,
+body.dark-theme .push115-section-heading h2,
+body.dark-theme .push115-toggle-card strong,
+body.dark-theme .push115-checkbox-line strong {
+  color: #f3f6fb;
+}
+
+body.dark-theme .push115-card-heading p,
+body.dark-theme .push115-section-heading p,
+body.dark-theme .push115-popup-preferences,
+body.dark-theme .push115-field {
+  color: #9aa7ba;
+}
+
+body.dark-theme .push115-textarea,
+body.dark-theme .push115-select,
+body.dark-theme .push115-input,
+body.dark-theme .push115-toggle-card,
+body.dark-theme .push115-checkbox-line {
+  border-color: #3a4556;
+  background: #222a36;
+  color: #f3f6fb;
+}
+
+@media (max-width: 420px) {
+  .push115-content {
+    display: block;
+  }
+
+  .push115-card,
+  .push115-popup-preferences {
+    margin-bottom: 12px;
+  }
+}

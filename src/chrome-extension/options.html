@@ -19,8 +19,21 @@
 			</header>
 
 			<main class="push115-options-layout">
+				<aside class="push115-settings-sidebar" aria-label="设置分页">
+					<div class="push115-settings-sidebar-title" data-i18n="settings_nav_title">设置导航</div>
+					<nav id="push115-settings-nav" class="push115-settings-nav">
+						<button type="button" class="active" data-settings-page-target="general" data-i18n="settings_nav_general">常规</button>
+						<button type="button" data-settings-page-target="directories" data-i18n="settings_nav_directories">目录同步</button>
+						<button type="button" data-settings-page-target="sites" data-i18n="settings_nav_sites">站点规则</button>
+						<button type="button" data-settings-page-target="bridge" data-i18n="settings_nav_bridge">Bridge / Telegram</button>
+						<button type="button" data-settings-page-target="rules" data-i18n="settings_nav_rules">文件规则</button>
+						<button type="button" data-settings-page-target="logs" data-i18n="settings_nav_logs">任务日志</button>
+					</nav>
+					<p class="push115-settings-sidebar-hint" data-i18n="settings_nav_hint">切换分页不会丢失未保存内容；完成修改后点击底部保存。</p>
+				</aside>
+				<div class="push115-settings-main">
 				<section class="push115-card">
-					<div class="push115-card-heading">
+					<div class="push115-card-heading" data-settings-page="general">
 						<div>
 							<h2 data-i18n="settings_title">设置</h2>
 							<p data-i18n="settings_subtitle">这些设置会被后台任务和网页推送共同使用。</p>
@@ -28,7 +41,7 @@
 					</div>
 
 					<form id="push115-settings-form">
-						<div class="push115-field-grid">
+						<div class="push115-field-grid" data-settings-page="general">
 							<div class="push115-field">
 								<label for="push115-language-select" data-i18n="language_label">语言 / Language</label>
 								<select id="push115-language-select">
@@ -46,7 +59,7 @@
 							</div>
 						</div>
 
-						<div class="push115-field-grid">
+						<div class="push115-field-grid" data-settings-page="general">
 							<div class="push115-field">
 								<label for="push115-default-save-cid" data-i18n="save_cid_label">默认保存目录</label>
 								<select id="push115-default-save-cid"></select>
@@ -59,13 +72,13 @@
 							</div>
 						</div>
 
-						<div class="push115-field">
+						<div class="push115-field" data-settings-page="directories">
 							<label for="push115-save-dirs-input" data-i18n="save_dirs_label">115 离线目录（一行一个）</label>
 							<textarea id="push115-save-dirs-input" rows="4" data-placeholder="save_dirs_placeholder" placeholder="例如：电影:123456789"></textarea>
 							<p class="push115-hint" data-i18n="save_dirs_hint">格式：目录名:CID，例如：电影:123456789；也可从下方扫描结果点选。手工 CID 仍作为高级 fallback。</p>
 						</div>
 
-						<div class="push115-directory-browser">
+						<div class="push115-directory-browser" data-settings-page="directories">
 							<div class="push115-directory-browser-heading">
 								<div>
 									<h3 data-i18n="directory_index_title">115 目录索引</h3>
@@ -77,9 +90,9 @@
 							<p id="push115-directory-status" class="push115-hint"></p>
 						</div>
 
-						<div class="push115-divider"></div>
+						<div class="push115-divider" data-settings-page="general"></div>
 
-						<div class="push115-toggle-grid">
+						<div class="push115-toggle-grid" data-settings-page="general">
 							<label class="push115-toggle">
 								<input id="push115-auto-delete" type="checkbox" />
 								<span>
@@ -96,44 +109,34 @@
 							</label>
 						</div>
 
-						<div class="push115-divider"></div>
+						<div class="push115-divider" data-settings-page="sites"></div>
 
-						<div class="push115-rule-heading">
-							<h3>站点增强</h3>
-							<p>每个站点独立控制启用状态、保存目录、页面增强方式与后台 processor；保存目录选项来自上方目录列表，首次启用会请求对应网页权限。</p>
+						<div class="push115-rule-heading" data-settings-page="sites">
+							<h3 data-i18n="sites_title">站点增强</h3>
+							<p data-i18n="sites_subtitle">每个站点独立控制启用状态、保存目录、页面增强方式与后台 processor；保存目录选项来自上方目录列表。JavBus 通常选择 AV 目录，Anime 站点选择番剧目录。</p>
 						</div>
-						<div id="push115-site-profiles" class="push115-site-profiles"></div>
+						<div id="push115-site-profiles" class="push115-site-profiles" data-settings-page="sites"></div>
 
-						<div class="push115-divider"></div>
+						<div class="push115-divider" data-settings-page="bridge"></div>
 
-						<div class="push115-rule-heading">
+						<div class="push115-rule-heading" data-settings-page="bridge">
 							<h3 data-i18n="bridge_title">本地服务连接</h3>
 							<p data-i18n="bridge_subtitle">从本机服务领取候选任务并提交到 115。地址固定为 http://127.0.0.1:52115，不会读取网页 Cookie。</p>
 						</div>
-						<div class="push115-bridge-panel">
+						<div class="push115-bridge-panel" data-settings-page="bridge">
 							<div class="push115-bridge-onboarding">
 								<div class="push115-bridge-section-heading">
 									<div>
-										<h4 data-i18n="bridge_pairing_title">快速配对</h4>
-										<p data-i18n="bridge_pairing_hint">Bridge 启动后会在终端显示一次性配对码；配对成功后，Bearer token 会安全保存在扩展本地。</p>
+										<h4 data-i18n="bridge_bootstrap_title">自动连接</h4>
+										<p data-i18n="bridge_bootstrap_hint">扩展只连接固定的本机 Bridge；首次连接会自动取得并保存本地 Bearer 凭据，不需要配对码或五分钟窗口。</p>
 									</div>
-									<button class="push115-btn push115-btn-secondary" id="push115-bridge-refresh" type="button" data-i18n="bridge_refresh_button">检查 Bridge</button>
+									<button class="push115-btn push115-btn-secondary" id="push115-bridge-refresh" type="button" data-i18n="bridge_connect_button">连接本机 Bridge</button>
 								</div>
 								<div class="push115-bridge-status-row">
 									<strong data-i18n="bridge_status_label">Bridge 状态</strong>
 									<span id="push115-bridge-bootstrap-status" class="push115-status-text" aria-live="polite"></span>
 								</div>
-								<div class="push115-field-grid push115-bridge-pairing-fields">
-									<div class="push115-field">
-										<label for="push115-bridge-pairing-code" data-i18n="bridge_pairing_code_label">配对码</label>
-										<input id="push115-bridge-pairing-code" type="text" autocomplete="one-time-code" inputmode="text" spellcheck="false" maxlength="32" data-placeholder="bridge_pairing_code_placeholder" placeholder="例如：K7MP-4Q2D" />
-									</div>
-									<div class="push115-field push115-bridge-pairing-action">
-										<label aria-hidden="true">&nbsp;</label>
-										<button class="push115-btn push115-btn-primary" id="push115-bridge-pair" type="button" data-i18n="bridge_pair_button">配对并启用</button>
-									</div>
-								</div>
-								<p id="push115-bridge-pair-status" class="push115-status" role="status" aria-live="polite"></p>
+								<p id="push115-bridge-connect-status" class="push115-status" role="status" aria-live="polite"></p>
 							</div>
 
 							<div class="push115-bridge-telegram">
@@ -173,7 +176,7 @@
 										<strong data-i18n="telegram_owner_label">管理员</strong>
 										<span id="push115-telegram-owner-status" class="push115-status-text"></span>
 									</div>
-									<a id="push115-telegram-claim-link" class="push115-telegram-claim-link" href="#" target="_blank" rel="noopener noreferrer" hidden data-i18n="telegram_claim_link">打开 Telegram 绑定管理员</a>
+									<p class="push115-hint" data-i18n="telegram_owner_hint">首次配置后，在机器人私聊中发送 /start 即可自动绑定当前管理员。</p>
 								</div>
 								<p id="push115-telegram-status-message" class="push115-status" role="status" aria-live="polite"></p>
 							</div>
@@ -203,13 +206,13 @@
 							</details>
 						</div>
 
-						<div class="push115-divider"></div>
+						<div class="push115-divider" data-settings-page="rules"></div>
 
-						<div class="push115-rule-heading">
+						<div class="push115-rule-heading" data-settings-page="rules">
 							<h3 data-i18n="rules_title">文件扩展名规则</h3>
 							<p data-i18n="rules_subtitle">每行或用逗号分隔；扩展名可带或不带点。</p>
 						</div>
-						<div class="push115-field-grid">
+						<div class="push115-field-grid" data-settings-page="rules">
 							<div class="push115-field">
 								<label for="push115-junk-extensions" data-i18n="junk_extensions_label">明确垃圾扩展名（直接回收）</label>
 								<textarea id="push115-junk-extensions" rows="5" data-placeholder="junk_extensions_placeholder"></textarea>
@@ -222,13 +225,13 @@
 							</div>
 					</div>
 
-						<div class="push115-field">
+						<div class="push115-field" data-settings-page="rules">
 							<label for="push115-clean-extensions" data-i18n="clean_extensions_label">可选清理扩展名（仅小于阈值）</label>
 							<textarea id="push115-clean-extensions" rows="3" data-placeholder="clean_extensions_placeholder"></textarea>
 							<p class="push115-hint" data-i18n="clean_extensions_hint">默认为空。适合放入你确认无用的非视频扩展名；不会替代视频安全判断。</p>
 						</div>
 
-						<div class="push115-toggle-grid push115-toggle-grid-small">
+						<div class="push115-toggle-grid push115-toggle-grid-small" data-settings-page="rules">
 							<label class="push115-toggle">
 								<input id="push115-clean-images" type="checkbox" />
 								<span>
@@ -253,7 +256,7 @@
 					</form>
 				</section>
 
-				<section class="push115-card push115-log-card">
+				<section class="push115-card push115-log-card" data-settings-page="logs">
 					<div class="push115-card-heading push115-log-heading">
 						<div>
 							<h2 data-i18n="logs_title">后台任务与日志</h2>
@@ -269,6 +272,7 @@
 					<div id="push115-log-summary" class="push115-log-summary"></div>
 					<div id="push115-log-list" class="push115-log-list"></div>
 				</section>
+				</div>
 			</main>
 		</div>
 

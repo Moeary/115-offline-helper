@@ -58,6 +58,50 @@ def test_javbus_parses_page_and_ajax_magnets() -> None:
     assert any("uncledatoolsbyajax.php" in url for url, _ in client.calls)
 
 
+def test_javbus_keeps_page_magnet_when_ajax_enrichment_is_rejected() -> None:
+    page = """
+    <html><head><title>ABC-123 Demo</title></head><body>
+      <a href="magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&dn=Page">page</a>
+      <script>var gid = '42'; var uc = '1'; var lang = 'zh';</script>
+    </body></html>
+    """
+    client = FakeClient(
+        {
+            "page": FakeResponse("https://www.javbus.com/ABC-123", page),
+            "ajax": FakeResponse(
+                "https://www.javbus.com/ajax/uncledatoolsbyajax.php", "", 403
+            ),
+        }
+    )
+    provider = JavBusProvider(
+        "https://javbus.com",
+        allowed_hosts={"javbus.com", "www.javbus.com"},
+        client=client,
+    )
+    metadata = asyncio.run(provider.lookup("ABC-123"))
+    assert len(metadata.candidates) == 1
+    assert metadata.candidates[0].btih == "b" * 32
+
+
+def test_javbus_reads_ajax_parameters_from_data_attributes() -> None:
+    page = """
+    <html><head><title>ABC-123 Demo</title></head><body>
+      <div data-gid="42" data-uc="1" data-lang="zh"></div>
+    </body></html>
+    """
+    ajax = '<a href="magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccc&dn=Data">data</a>'
+    client = FakeClient(
+        {
+            "page": FakeResponse("https://www.javbus.com/ABC-123", page),
+            "ajax": FakeResponse("https://www.javbus.com/ajax/uncledatoolsbyajax.php", ajax),
+        }
+    )
+    provider = JavBusProvider("https://javbus.com", allowed_hosts={"javbus.com", "www.javbus.com"}, client=client)
+    metadata = asyncio.run(provider.lookup("ABC-123"))
+    assert metadata.candidates[0].btih == "c" * 32
+    assert any(params.get("gid") == "42" for _url, params in client.calls)
+
+
 def test_javbus_rejects_a_different_resolved_page_code() -> None:
     client = FakeClient(
         {

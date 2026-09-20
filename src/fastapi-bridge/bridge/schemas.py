@@ -175,6 +175,8 @@ _DIRECTORY_MAX_ROOTS = 32
 _DIRECTORY_MAX_NAME = 256
 _DIRECTORY_MAX_PATH = 4096
 _DIRECTORY_MAX_PAYLOAD_BYTES = 1024 * 1024
+_SITE_ID = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?\Z")
+_DIRECTORY_MAX_SITE_DEFAULTS = 16
 
 
 def _directory_cid(value: Any, *, field_name: str) -> str:
@@ -270,12 +272,30 @@ class DirectoryEntry(StrictModel):
         return self
 
 
+class DirectorySiteDefault(StrictModel):
+    """One extension site profile shared with Telegram candidate callbacks."""
+
+    enabled: StrictBool = False
+    save_path_cid: StrictStr = Field("0", alias="savePathCid", min_length=1, max_length=64)
+    processor_profile: Literal["generic", "jav", "anime"] = Field(
+        "generic", alias="processorProfile"
+    )
+
+    @field_validator("save_path_cid", mode="before")
+    @classmethod
+    def validate_save_path_cid(cls, value: Any) -> str:
+        return _directory_cid(value, field_name="siteDefaults.savePathCid")
+
+
 class DirectoryRegistryRequest(StrictModel):
     """Bounded, versioned directory snapshot uploaded by the extension."""
 
     schema_version: Literal[1] = Field(1, alias="schema")
     revision: StrictInt = Field(..., ge=0, le=2**63 - 1)
     scanned_at: StrictInt = Field(..., alias="scannedAt", ge=0, le=2**63 - 1)
+    site_defaults: dict[str, DirectorySiteDefault] | None = Field(
+        None, alias="siteDefaults", max_length=_DIRECTORY_MAX_SITE_DEFAULTS
+    )
     # Older producers use a list of root CIDs; accepting entry-shaped roots
     # keeps the payload compatible with producers that expose root labels too.
     roots: list[DirectoryEntry | StrictStr] = Field(
@@ -284,6 +304,18 @@ class DirectoryRegistryRequest(StrictModel):
     directories: list[DirectoryEntry] = Field(
         default_factory=list, max_length=_DIRECTORY_MAX_ENTRIES
     )
+
+    @field_validator("site_defaults")
+    @classmethod
+    def validate_site_defaults(
+        cls, value: dict[str, DirectorySiteDefault] | None
+    ) -> dict[str, DirectorySiteDefault] | None:
+        if value is None:
+            return None
+        for site_id in value:
+            if not isinstance(site_id, str) or not _SITE_ID.fullmatch(site_id):
+                raise ValueError("siteDefaults 的站点 ID 无效")
+        return value
 
     @field_validator("roots")
     @classmethod
@@ -338,6 +370,20 @@ class DirectoryRegistryRequest(StrictModel):
 # the short entry name or the full registry terminology.
 DirectoryRegistryEntry = DirectoryEntry
 DirectoryRegistry = DirectoryRegistryRequest
+
+
+def dump_directory_registry(value: DirectoryRegistryRequest) -> dict[str, Any]:
+    """Serialize a registry while preserving legacy null parent fields.
+
+    ``siteDefaults`` is optional for older extensions.  Omit only that absent
+    field; directory entry aliases such as ``parentCid: null`` remain intact
+    so old snapshots keep their established wire shape.
+    """
+
+    result = value.model_dump(by_alias=True)
+    if value.site_defaults is None:
+        result.pop("siteDefaults", None)
+    return result
 
 
 class IntentModel(StrictModel):

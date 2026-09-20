@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.11.0-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.14.0-orange" alt="Version">
 </p>
 
 ---
@@ -138,9 +138,9 @@ pixi run deploy
 
 ### 本地自动任务 Bridge
 
-扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。1.11.0 支持零配置引导：启动 Bridge 后，在设置页输入终端显示的一次性配对码即可取得并保存 Bearer token；普通用户无需查 Extension ID、复制 token、填写 chat/user ID 或编辑 `.env`。浏览器只请求固定 loopback 的可选权限，token 由 service worker 使用，不会注入网页或转发 Cookie。Bridge 的 Intent 只接受严格的 BTIH Magnet 或 ED2K file 链接。
+扩展可选地连接本机 FastAPI 服务 `http://127.0.0.1:52115`，领取 Telegram `/av` 与 JavBus 候选，再通过现有后台 `Router.submitIntent` 提交到 115。1.14.0 在站点默认规则同步基础上增加 Bridge 端口自动探测：启用后即使本地服务晚于浏览器启动，也会由后台轮询自动连接并在服务恢复后补同步目录。目录 registry 的并发修订会自动串行化与自愈，115 目录读取兼容不同 breadcrumb 顺序和分页返回形式，并保留明确 CID 校验。Popup 采用固定宽度的双栏工作台布局，设置页会显示目录同步数量与修订号。JavBus AJAX 磁力请求失败时，只要页面已有候选仍会保留结果，并兼容页面属性形式的参数。浏览器只请求固定 loopback 的可选权限，token 由 service worker 使用，不会注入网页或转发 Cookie。Bridge 的 Intent 只接受严格的 BTIH Magnet 或 ED2K file 链接。
 
-设置页现在只需在高级配置之外填写 Telegram Bot Token；Bridge 会用 `getMe` 校验、动态启动 polling，并生成 Telegram `/start` 管理员认领链接。认领后只允许该 owner 使用 `/av`、`/anime`、`/add`、`/jobs`、`/dir`；更换 token 会要求重新认领。目录扫描结果会以非敏感的 `schema/revision/path/CID` 快照自动同步到 Bridge SQLite，Telegram `/dir` 动态读取最新快照并按目录树分页浏览；Bridge 尚未收到浏览器快照时会提示先同步目录，旧版 `PUSH115_TELEGRAM_SAVE_PATHS` 仍可作为兼容 fallback。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile`（`/av` 为 `jav`、`/anime` 为 `anime`）和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Telegram 支持 `/dir` 选择动态目录、`/add <Magnet|ED2K>` 直接入队和 `/jobs` 查看任务；详情页可对失败任务重试、对进行中任务取消。取消进行中任务只停止扩展本地任务和监控，不取消 115 云端离线任务；排队中的任务可以直接终止。Bridge 的 `/av` 查询 JavBus，现有 `/anime 关键词` 保持 Nyaa RSS 搜索，本版本没有新增 RSS、订阅或自动搜索能力。高级环境变量见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
+设置页现在只需在高级配置之外填写 Telegram Bot Token；Bridge 会用 `getMe` 校验并动态启动 polling。首次配置后，用户在机器人私聊中发送 `/start` 即自动成为 owner，无需 nonce 或认领链接；之后只允许该 owner 使用 `/av`、`/anime`、`/add`、`/jobs`、`/dir`，更换 token 会清除旧 owner 并要求新 token 的首次 `/start`。目录扫描结果会以非敏感的 `schema/revision/path/CID` 快照及站点默认规则自动同步到 Bridge SQLite：JavBus 默认应选择 AV CID，Anime 站点默认应选择番剧 CID；Telegram 候选会使用对应站点的 CID 与 processor，而 `/dir` 中“使用当前目录”优先覆盖它。目录索引中的“加入”只加入扩展本地保存目录列表，不会创建目录或立即下载。Telegram `/dir` 动态读取最新快照并按目录树分页浏览；Bridge 尚未收到浏览器快照时会提示先同步目录，旧版 `PUSH115_TELEGRAM_SAVE_PATHS` 仍可作为兼容 fallback。后台每 30 秒领取一次任务，先持久化 `jobId`、租约和提交状态，再提交带有明确 `processorProfile` 和 `metadata.monitorDownload: true` 的意图；任务进度与完成/失败状态通过稳定的事件 ID 回传。网络中断、扩展重启或本地保存失败后无法确认提交结果时会标记为 `uncertain` 并停止自动重投，需人工处理；本地 `recorded` 历史记录不会被当作完成。Telegram 支持 `/dir` 选择动态目录、`/add <Magnet|ED2K>` 直接入队和 `/jobs` 查看任务；详情页可对失败任务重试、对进行中任务取消。取消进行中任务只停止扩展本地任务和监控，不取消 115 云端离线任务；排队中的任务可以直接终止。Bridge 的 `/av` 查询 JavBus，现有 `/anime 关键词` 保持 Nyaa RSS 搜索。JavBus 的 AJAX 补充请求被拒时，若页面已有磁力仍会保留候选。高级环境变量见 [`src/fastapi-bridge/README.md`](src/fastapi-bridge/README.md)。
 
 在仓库根目录使用 Pixi 启动 Bridge：
 
@@ -152,12 +152,12 @@ pixi run start
 #### Telegram 机器人首次配置
 
 1. 在 Telegram 私聊 `@BotFather`，发送 `/newbot`，按提示填写机器人名称和用户名，复制返回的 HTTP API Token。Token 是秘密凭据，不要发到群组、截图或提交到 Git。
-2. 首次启动时，终端会显示 5 分钟内有效、最多允许 5 次失败的一次性配对码。打开扩展设置页，在“本地自动任务 Bridge”中点击“检查 Bridge”，输入配对码，再点击“配对并启用”；首次操作时允许 `http://127.0.0.1/*` 可选权限。
-3. 在同一设置页的“Telegram Bot”区域粘贴 Bot Token，点击“连接 Telegram”。Bridge 会调用 `getMe` 校验 Token，成功后动态启动 polling，并显示机器人用户名和一次性管理员认领链接。
-4. 点击“打开 Telegram 绑定管理员”，在机器人私聊中点击 **Start**（或发送该链接），看到“已绑定为管理员”后再使用机器人命令。认领链接只应发给自己的 Telegram 账号。
+2. 打开扩展设置页，在“本地自动任务 Bridge”中点击“连接本机 Bridge”；首次操作时允许 `http://127.0.0.1/*` 可选权限。连接凭据会由 Bridge 持久保存并自动复用，不需要输入配对码。
+3. 在同一设置页的“Telegram Bot”区域粘贴 Bot Token，点击“连接 Telegram”。Bridge 会调用 `getMe` 校验 Token，成功后动态启动 polling，并显示机器人用户名。
+4. 在机器人私聊中发送 **/start**；首次发送者会自动绑定为管理员，看到“已绑定为管理员”后再使用机器人命令。
 5. 保持 115 登录、Chrome 扩展启用和 Bridge 终端运行。在扩展设置页点击“扫描目录”，等待目录同步完成，再在机器人中发送 `/dir` 选择默认保存目录。
 
-浏览器重装或丢失本地配对信息时，先按 `Ctrl+C` 停止已有 Bridge，再运行 `pixi run pair` 打开新的配对窗口；不要同时启动两个 Bridge 实例。更换 Bot Token 会清除旧管理员，重新连接后必须再次点击认领链接。高级用户仍可使用 `.env.example` 覆盖 provider、数据库和超时配置。
+浏览器扩展重新安装或丢失本地凭据时，保持已有 Bridge 运行并回到设置页再次点击“连接本机 Bridge”即可恢复；不要同时启动两个 Bridge 实例。更换 Bot Token 会清除旧管理员，使用新 Bot 私聊发送 `/start` 即可重新绑定。高级用户仍可使用 `.env.example` 覆盖 provider、数据库和超时配置。
 
 #### Telegram 机器人命令
 

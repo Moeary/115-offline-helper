@@ -29,8 +29,31 @@
 		return data[STORAGE_KEYS.COOKIE] || ''
 	}
 
+	async function get115Cookies() {
+		const filters = [
+			{ domain: '.115.com' },
+			{ domain: '115.com' },
+			{ url: 'https://webapi.115.com/' },
+		]
+		const unique = new Map()
+		for (const filter of filters) {
+			try {
+				const cookies = await chrome.cookies.getAll(filter)
+				for (const cookie of Array.isArray(cookies) ? cookies : []) {
+					const key = `${cookie.name || ''}|${cookie.domain || ''}|${cookie.path || '/'}`
+					if (cookie.name && !unique.has(key)) unique.set(key, cookie)
+				}
+			} catch (error) {
+				// A browser may reject one filter form while still allowing the
+				// remaining host-scoped filters.  Do not make directory reads fail
+				// merely because a duplicate cookie query is unsupported.
+			}
+		}
+		return [...unique.values()]
+	}
+
 	async function has115AuthCookies() {
-		const cookies = await chrome.cookies.getAll({ domain: '.115.com' })
+		const cookies = await get115Cookies()
 		const names = new Set(cookies.map(cookie => cookie.name))
 		return names.has('UID') && names.has('CID') && names.has('SEID')
 	}
@@ -77,7 +100,7 @@
 	}
 
 	async function getCookie() {
-		const cookies = await chrome.cookies.getAll({ domain: '.115.com' })
+		const cookies = await get115Cookies()
 		let cookieString = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ')
 		if (!cookieString) {
 			cookieString = await getPersistedCookie()
