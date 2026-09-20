@@ -60,3 +60,41 @@ test('115 file mutations are serialized and spaced', { timeout: 10000 }, async (
 	assert.equal(context.Push115.Background.OfflineApi.submissionPolicy.concurrency, 1)
 	assert.equal(context.Push115.Background.OfflineApi.submissionPolicy.minIntervalMs, 500)
 })
+
+test('file response diagnostics expose only bounded structural fields', () => {
+	const context = vm.createContext({
+		console,
+		Date,
+		Promise,
+		URLSearchParams,
+		Push115: {
+			Background: {
+				Client: { async data() { return { state: true } } },
+			},
+		},
+	})
+	vm.runInContext(fs.readFileSync(source, 'utf8'), context, { filename: source })
+	const result = context.Push115.Background.FilesApi.responseDiagnostics({
+		state: false,
+		code: 'LOGIN_REQUIRED',
+		errno: 401,
+		message: 'session expired',
+		data: { list: [], privateField: 'not returned' },
+		list: [],
+		secretFileName: 'never logged',
+	}, '0')
+
+	assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+		cid: '0',
+		keys: ['state', 'code', 'errno', 'message', 'data', 'list', 'secretFileName'],
+		state: false,
+		code: 'LOGIN_REQUIRED',
+		errno: 401,
+		message: 'session expired',
+		dataType: 'object',
+		dataKeys: ['list', 'privateField'],
+		hasDataArray: false,
+		hasDataList: true,
+		hasList: true,
+	})
+})

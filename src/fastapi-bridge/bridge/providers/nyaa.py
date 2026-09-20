@@ -22,7 +22,9 @@ from .base import MagnetCandidate, ProviderError
 
 
 _MAGNET_TEXT = re.compile(r"magnet:\?[^<>\s'\"`]+", re.IGNORECASE)
+_CATEGORY_PATTERN = re.compile(r"[0-9]{1,3}_[0-9]{1,3}\Z")
 _MAX_KEYWORD = 256
+_MAX_CATEGORY = 16
 
 
 @dataclass(frozen=True)
@@ -58,13 +60,19 @@ def _clean_text(value: object, limit: int = 512) -> str:
     return value[:limit]
 
 
-class NyaaRssProvider:
-    """Search a Nyaa-compatible RSS endpoint over a fixed HTTPS origin."""
+class NyaaCompatibleRssProvider:
+    """Search a Nyaa-compatible RSS endpoint over a fixed HTTPS origin.
+
+    ``category`` is deliberately limited to Nyaa's numeric ``group_type``
+    shape before it reaches the query string.  The value is still encoded by
+    :func:`urllib.parse.urlencode`, so it cannot add URL syntax or parameters.
+    """
 
     def __init__(
         self,
         base_url: str = "https://nyaa.si",
         *,
+        category: str = "1_0",
         allowed_hosts: set[str] | frozenset[str] | None = None,
         timeout_seconds: float = 15.0,
         max_response_bytes: int = 2_000_000,
@@ -83,6 +91,7 @@ class NyaaRssProvider:
             raise ValueError("Nyaa base URL 必须是无凭据的 HTTPS 地址")
         self.base_url = str(base_url).rstrip("/")
         self.base_host = parsed.hostname.lower().rstrip(".")
+        self.category = self._category(category)
         self.allowed_hosts = {
             str(host).lower().rstrip(".")
             for host in (allowed_hosts or {self.base_host})
@@ -126,7 +135,14 @@ class NyaaRssProvider:
         keyword = self._keyword(keyword)
         # Nyaa's RSS mode is selected by page=rss.  No page number or
         # subscription state is accepted by this first search implementation.
-        return f"{self.base_url}/?{urlencode({'page': 'rss', 'f': '0', 'c': '1_0', 'q': keyword})}"
+        return f"{self.base_url}/?{urlencode({'page': 'rss', 'f': '0', 'c': self.category, 'q': keyword})}"
+
+    @staticmethod
+    def _category(value: object) -> str:
+        category = _clean_text(value, _MAX_CATEGORY + 1)
+        if not category or not _CATEGORY_PATTERN.fullmatch(category):
+            raise ValueError("Nyaa RSS category 必须是类似 1_0 的数字分类")
+        return category
 
     @staticmethod
     def _keyword(value: object) -> str:
@@ -237,7 +253,7 @@ class NyaaRssProvider:
         keyword: str = "",
         feed_url: str = "",
         max_results: int = 20,
-        provider: "NyaaRssProvider | None" = None,
+        provider: "NyaaCompatibleRssProvider | None" = None,
     ) -> NyaaSearchResult:
         data = source.encode("utf-8") if isinstance(source, str) else bytes(source)
         if b"<!DOCTYPE" in data.upper() or b"<!ENTITY" in data.upper():
@@ -331,7 +347,42 @@ class NyaaRssProvider:
         return await self.search(keyword)
 
 
-NyaaProvider = NyaaRssProvider
-NyaaRSSProvider = NyaaRssProvider
+class SukebeiRssProvider(NyaaCompatibleRssProvider):
+    """Nyaa-compatible provider preconfigured for ``sukebei.nyaa.si``."""
 
-__all__ = ["NyaaProvider", "NyaaRSSProvider", "NyaaRssProvider", "NyaaSearchResult"]
+    def __init__(
+        self,
+        base_url: str = "https://sukebei.nyaa.si",
+        *,
+        category: str = "0_0",
+        allowed_hosts: set[str] | frozenset[str] | None = None,
+        timeout_seconds: float = 15.0,
+        max_response_bytes: int = 2_000_000,
+        max_results: int = 20,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        super().__init__(
+            base_url,
+            category=category,
+            allowed_hosts=allowed_hosts,
+            timeout_seconds=timeout_seconds,
+            max_response_bytes=max_response_bytes,
+            max_results=max_results,
+            client=client,
+        )
+
+
+# Keep the historical names as exact aliases so callers relying on identity or
+# isinstance checks continue to work after the provider was generalized.
+NyaaRssProvider = NyaaCompatibleRssProvider
+NyaaProvider = NyaaCompatibleRssProvider
+NyaaRSSProvider = NyaaCompatibleRssProvider
+
+__all__ = [
+    "NyaaCompatibleRssProvider",
+    "NyaaProvider",
+    "NyaaRSSProvider",
+    "NyaaRssProvider",
+    "NyaaSearchResult",
+    "SukebeiRssProvider",
+]

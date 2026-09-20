@@ -18,7 +18,13 @@ from pydantic import (
     model_validator,
 )
 
-from .normalize import is_ed2k, is_magnet, normalize_code, parse_ed2k
+from .normalize import (
+    is_ed2k,
+    is_magnet,
+    normalize_code,
+    normalize_exact_code,
+    parse_ed2k,
+)
 
 
 def _validate_bounded_json(value: Any, *, field_name: str) -> Any:
@@ -167,6 +173,39 @@ class TelegramRuntimeResponse(StrictModel):
     configured: StrictBool
     bot_username: StrictStr | None = Field(None, alias="botUsername")
     owner_bound: StrictBool = Field(..., alias="ownerBound")
+
+
+class AvEnqueueRequest(StrictModel):
+    """Select one server-side AV search result for browser submission."""
+
+    schema_version: Literal[1] = Field(1, alias="schema")
+    code: StrictStr = Field(..., min_length=1, max_length=64)
+    candidate_index: StrictInt = Field(0, alias="candidateIndex", ge=0, le=99)
+    save_path_cid: StrictStr | None = Field(
+        None, alias="savePathCid", max_length=64
+    )
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def validate_av_code(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            raise ValueError("code 必须是字符串")
+        normalized = normalize_exact_code(value.strip())
+        if not normalized:
+            raise ValueError("code 不是可识别的番号")
+        return normalized
+
+    @field_validator("save_path_cid", mode="before")
+    @classmethod
+    def validate_save_path(cls, value: Any) -> str | None:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            raise ValueError("savePathCid 必须是字符串 CID")
+        value = value.strip()
+        if not re.fullmatch(r"(?:0|[1-9][0-9]{0,63})", value):
+            raise ValueError("savePathCid 必须是无前导零的数字 CID")
+        return value
 
 
 _DIRECTORY_CID = re.compile(r"(?:0|[1-9][0-9]{0,63})\Z")

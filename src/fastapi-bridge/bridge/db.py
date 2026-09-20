@@ -980,12 +980,17 @@ class QueueStore:
         intent: Mapping[str, Any],
         *,
         candidate_key: str,
-        telegram_chat_id: int,
-        telegram_user_id: int,
-        telegram_message_id: int,
+        telegram_chat_id: int | None,
+        telegram_user_id: int | None,
+        telegram_message_id: int | None,
         now: float | None = None,
     ) -> tuple[JobRecord, bool]:
-        """Insert a Telegram-selected job, returning (record, inserted)."""
+        """Insert a selected job, returning ``(record, inserted)``.
+
+        Telegram callers provide chat/user/message identifiers.  Local HTTP
+        callers leave those fields null and use the candidate key as the
+        durable idempotency identity.
+        """
 
         now = _now() if now is None else float(now)
         candidate_key = str(candidate_key).strip()
@@ -997,18 +1002,32 @@ class QueueStore:
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
-                existing_row = self._connection.execute(
-                    """
-                    SELECT * FROM jobs
-                    WHERE telegram_chat_id = ?
-                      AND telegram_user_id = ?
-                      AND candidate_key = ?
-                      AND status NOT IN ('failed', 'cancelled')
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (int(telegram_chat_id), int(telegram_user_id), candidate_key),
-                ).fetchone()
+                if telegram_chat_id is None and telegram_user_id is None:
+                    existing_row = self._connection.execute(
+                        """
+                        SELECT * FROM jobs
+                        WHERE telegram_chat_id IS NULL
+                          AND telegram_user_id IS NULL
+                          AND candidate_key = ?
+                          AND status NOT IN ('failed', 'cancelled')
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        (candidate_key,),
+                    ).fetchone()
+                else:
+                    existing_row = self._connection.execute(
+                        """
+                        SELECT * FROM jobs
+                        WHERE telegram_chat_id = ?
+                          AND telegram_user_id = ?
+                          AND candidate_key = ?
+                          AND status NOT IN ('failed', 'cancelled')
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """,
+                        (int(telegram_chat_id), int(telegram_user_id), candidate_key),
+                    ).fetchone()
                 existing = self._row_to_job(existing_row)
                 if existing:
                     self._connection.execute("COMMIT")
@@ -1028,9 +1047,9 @@ class QueueStore:
                         _json(normalized_intent),
                         now,
                         now,
-                        int(telegram_chat_id),
-                        int(telegram_user_id),
-                        int(telegram_message_id),
+                        None if telegram_chat_id is None else int(telegram_chat_id),
+                        None if telegram_user_id is None else int(telegram_user_id),
+                        None if telegram_message_id is None else int(telegram_message_id),
                         candidate_key,
                     ),
                 )

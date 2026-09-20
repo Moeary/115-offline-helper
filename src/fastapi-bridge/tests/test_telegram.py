@@ -718,6 +718,44 @@ def test_telegram_reads_dynamic_registry_without_restart_and_keeps_static_fallba
         store.close()
 
 
+def test_telegram_shows_stale_directory_cache_while_refreshing_in_background() -> None:
+    store = QueueStore(":memory:")
+    transport = FakeTransport()
+    service = TelegramService(
+        store,
+        FakeProvider(),
+        transport,
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        clock=lambda: 1700002000,
+    )
+    try:
+        store.set_directory_registry(
+            _telegram_registry(
+                2,
+                [
+                    {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+                    {"cid": "9", "parentCid": "0", "name": "旧缓存", "path": "/旧缓存", "depth": 1},
+                ],
+            )
+        )
+        result = asyncio.run(service.handle_update({"message": _message("/dir")}))
+        assert result["kind"] == "dir"
+        assert any(
+            "旧缓存" in row[0]["text"]
+            for row in transport.messages[-1][3]["inline_keyboard"]
+            if row
+        )
+        assert len(transport.messages) == 1
+        actions = store.list_directory_sync_actions()
+        assert len(actions) == 0  # only terminal actions are listed for notification
+        action = store.claim_action("browser", now=1700002000)
+        assert action is not None
+        assert action.payload.get("statusMessageId") is None
+    finally:
+        store.close()
+
+
 def test_telegram_directory_picker_limits_large_registry_to_one_page() -> None:
     store = QueueStore(":memory:")
     transport = FakeTransport()

@@ -333,7 +333,7 @@ def _save_path_field(value: object, index: int, name: str) -> object:
 
 
 class TelegramService:
-    """Handle `/av` commands, one-time selection callbacks, and status edits."""
+    """Handle commands through provider services and durable queue callbacks."""
 
     def __init__(
         self,
@@ -356,7 +356,11 @@ class TelegramService:
         clock: Any = time.time,
     ) -> None:
         self.store = store
+        # The object is an AvSearchService in production.  Keep ``provider``
+        # as the constructor name for compatibility with injected test doubles
+        # and older callers, but do not couple the command path to JavBus.
         self.provider = provider
+        self.av_search_service = provider
         self.anime_provider = anime_provider
         self.transport = transport
         self.allowed_chat_ids = frozenset(int(item) for item in allowed_chat_ids)
@@ -510,7 +514,12 @@ class TelegramService:
         return _clip("\n".join(lines), 4096)
 
     async def _request_directory_sync(
-        self, message: Mapping[str, Any], chat_id: int, user_id: int
+        self,
+        message: Mapping[str, Any],
+        chat_id: int,
+        user_id: int,
+        *,
+        notify: bool = True,
     ) -> dict[str, Any] | None:
         requester = getattr(self.store, "request_directory_sync", None)
         if not callable(requester):
@@ -526,15 +535,17 @@ class TelegramService:
                 timeout_seconds=self.directory_sync_timeout_seconds,
                 now=float(self.clock()),
             )
-            sent = await self.transport.send_message(
-                chat_id,
-                "正在同步 115 目录……",
-            )
-            status_message_id = _message_id(sent)
-            if status_message_id is not None:
-                attach = getattr(self.store, "attach_directory_sync_message", None)
-                if callable(attach):
-                    attach(action.action_id, status_message_id)
+            status_message_id = None
+            if notify:
+                sent = await self.transport.send_message(
+                    chat_id,
+                    "正在同步 115 目录……",
+                )
+                status_message_id = _message_id(sent)
+                if status_message_id is not None:
+                    attach = getattr(self.store, "attach_directory_sync_message", None)
+                    if callable(attach):
+                        attach(action.action_id, status_message_id)
             return {
                 "handled": True,
                 "kind": SYNC_DIRECTORIES_ACTION,
@@ -544,10 +555,11 @@ class TelegramService:
                 "duplicate": bool(replay),
             }
         except Exception:
-            await self.transport.send_message(
-                chat_id,
-                "目录同步请求创建失败，请稍后重试。",
-            )
+            if notify:
+                await self.transport.send_message(
+                    chat_id,
+                    "目录同步请求创建失败，请稍后重试。",
+                )
             return {
                 "handled": True,
                 "kind": SYNC_DIRECTORIES_ACTION,
@@ -1568,12 +1580,21 @@ class TelegramService:
         if add_match:
             return await self._handle_add(message, add_match.group(1))
         if _DIR_COMMAND.fullmatch(text):
-            if not self._directory_registry_is_fresh():
+            registry = self._latest_directory_registry()
+            if registry is None:
                 sync_result = await self._request_directory_sync(
                     message, chat_id, user_id
                 )
                 if sync_result is not None:
                     return sync_result
+            elif not self._directory_registry_is_fresh():
+                # A stale snapshot remains usable.  Queue one durable refresh
+                # without replacing the user's working picker with a blocking
+                # "syncing" message; completion is still reported through the
+                # normal action notification path.
+                await self._request_directory_sync(
+                    message, chat_id, user_id, notify=False
+                )
             result = await self._send_directory_picker(chat_id, user_id)
             return {"handled": True, "kind": "dir", "messageId": _message_id(result)}
         if _JOBS_COMMAND.fullmatch(text):
@@ -1628,17 +1649,17 @@ class TelegramService:
             await self.transport.send_message(chat_id, "请输入有效的番号，例如 /av ABC-123")
             return {"handled": True, "error": "invalid_code"}
         try:
-            metadata = await self.provider.lookup(code)
+            metadata = await self.av_search_service.lookup(code)
         except ProviderError:
-            await self.transport.send_message(chat_id, "JavBus 暂时无法查询该番号，请稍后重试。")
+            await self.transport.send_message(chat_id, "AV 资源暂时无法查询，请稍后重试。")
             return {"handled": True, "error": "provider_unavailable"}
         except Exception:
-            await self.transport.send_message(chat_id, "查询失败，请稍后重试。")
+            await self.transport.send_message(chat_id, "AV 查询失败，请稍后重试。")
             return {"handled": True, "error": "provider_error"}
         actual_code, title, page_url, cover_url, candidates = self._metadata_details(metadata)
         actual_code = normalize_exact_code(actual_code) or code
         if not candidates:
-            await self.transport.send_message(chat_id, "JavBus 未找到可用磁力，请稍后重试或检查该番号。")
+            await self.transport.send_message(chat_id, "未找到可用磁力，请检查该番号或稍后重试。")
             return {"handled": True, "kind": "av", "code": actual_code, "candidateCount": 0}
         result = await self._send_result_for_user(
             chat_id,
@@ -1651,7 +1672,7 @@ class TelegramService:
             source_site="javbus",
             media_type="jav",
             processor_profile="jav",
-            provider_name="javbus",
+            provider_name="av-search",
         )
         return {
             "handled": True,

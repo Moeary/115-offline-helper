@@ -28,6 +28,33 @@
 		return result?.state === true || result?.state === 1 || result?.state === '1'
 	}
 
+	function responseDiagnostics(result, cid = '') {
+		const value = result && typeof result === 'object' ? result : {}
+		const data = value.data
+		const dataKeys = data && typeof data === 'object' && !Array.isArray(data)
+			? Object.keys(data).slice(0, 32)
+			: []
+		const scalar = field => {
+			const raw = value[field]
+			if (raw === undefined || raw === null) return null
+			if (typeof raw === 'boolean' || typeof raw === 'number') return raw
+			return String(raw).replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 256)
+		}
+		return {
+			cid: String(cid),
+			keys: Object.keys(value).slice(0, 64),
+			state: scalar('state'),
+			code: scalar('code'),
+			errno: scalar('errno'),
+			message: scalar('message'),
+			dataType: Array.isArray(data) ? 'array' : data === null ? 'null' : typeof data,
+			dataKeys,
+			hasDataArray: Array.isArray(data),
+			hasDataList: Array.isArray(data?.list),
+			hasList: Array.isArray(value.list),
+		}
+	}
+
 	async function list(cid = '0', offset = 0) {
 		return requestQueue.enqueue(() => client.data({
 			url: `https://webapi.115.com/files?aid=1&cid=${cid}&o=user_ptime&asc=0&offset=${offset}&show_dir=1&limit=500&snap=0&natsort=1`,
@@ -71,7 +98,7 @@
 	}
 
 	global.Push115.Background.FilesApi = {
-		list, createFolder, move, rename, remove, operationSucceeded,
+		list, createFolder, move, rename, remove, operationSucceeded, responseDiagnostics,
 		requestPolicy: requestQueue.policy,
 		// Keep the old public contract for callers that only care about writes.
 		mutationPolicy: requestQueue.policy,

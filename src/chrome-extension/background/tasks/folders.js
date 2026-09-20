@@ -45,7 +45,13 @@
 		for (let offset = 0; offset < 100000; ) {
 			const result = await api.list(cid, offset)
 			const pageItems = responseItems(result)
-			if (!api.operationSucceeded(result) || !pageItems) throw new Error(`无法读取目录 ${cid}`)
+			if (!api.operationSucceeded(result) || !pageItems) {
+				const diagnostics = typeof api.responseDiagnostics === 'function'
+					? api.responseDiagnostics(result, cid)
+					: { cid: String(cid) }
+				console.warn('[115 FilesApi] list response diagnostic', diagnostics)
+				throw new Error(`无法读取目录 ${cid}`)
+			}
 			path = responsePath(result, cid)
 			if (!path) throw new Error(`目录 ${cid} 不存在或 115 返回了其他目录，请重新绑定`)
 			const rawCount = result.count ?? result.total ?? result.total_count

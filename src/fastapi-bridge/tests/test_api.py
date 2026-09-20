@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from bridge.app import _decode_cursor, _encode_cursor, create_app
 from bridge.config import Settings
 from bridge.db import QueueStore
+from bridge.providers.base import AvMetadata, MagnetCandidate, ProviderError
 
 
 def _settings(token: str) -> Settings:
@@ -31,6 +32,137 @@ def _settings(token: str) -> Settings:
         javbus_timeout_seconds=15,
         javbus_max_response_bytes=2_000_000,
     )
+
+
+class _AvProvider:
+    def __init__(
+        self,
+        *,
+        error: Exception | None = None,
+        candidates: tuple[MagnetCandidate, ...] | None = None,
+    ) -> None:
+        self.error = error
+        self.candidates = (
+            candidates
+            if candidates is not None
+            else (
+                MagnetCandidate(
+                    url="magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&dn=ABF-386",
+                    title="ABF-386 release",
+                    btih="a" * 32,
+                    dedupe_key="btih:" + "a" * 32,
+                ),
+                MagnetCandidate(
+                    url="magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&dn=ABF-386-alt",
+                    title="ABF-386 alternate",
+                    btih="b" * 32,
+                    dedupe_key="btih:" + "b" * 32,
+                ),
+            )
+        )
+
+    async def lookup(self, code: str) -> AvMetadata:
+        if self.error:
+            raise self.error
+        return AvMetadata(
+            code=code,
+            title="ABF-386 metadata",
+            page_url=f"https://javbus.com/{code}",
+            cover_url="https://images.example/abf-386.jpg",
+            candidates=self.candidates,
+        )
+
+
+def test_av_search_endpoint_requires_auth_and_returns_validated_candidates() -> None:
+    token = "a" * 32
+    store = QueueStore(":memory:")
+    app = create_app(_settings(token), store=store, provider=_AvProvider())
+    try:
+        with TestClient(app) as client:
+            assert client.get("/v1/av/search?code=ABF-386").status_code == 401
+            response = client.get("/v1/av/search?code=abf-386", headers=_auth(token))
+            assert response.status_code == 200
+            body = response.json()
+            assert body["code"] == "ABF-386"
+            assert body["candidateCount"] == 2
+            assert body["candidates"][0]["dedupeKey"] == "btih:" + "a" * 32
+            assert body["candidates"][0]["btih"] == "a" * 32
+            assert client.get(
+                "/v1/av/search?code=not-a-code", headers=_auth(token)
+            ).status_code == 422
+    finally:
+        store.close()
+
+
+def test_av_enqueue_persists_jav_intent_and_reuses_active_candidate() -> None:
+    token = "e" * 32
+    store = QueueStore(":memory:")
+    app = create_app(_settings(token), store=store, provider=_AvProvider())
+    try:
+        with TestClient(app) as client:
+            first = client.post(
+                "/v1/av/enqueue",
+                headers=_auth(token),
+                json={"schema": 1, "code": "ABF-386", "candidateIndex": 0, "savePathCid": "42"},
+            )
+            assert first.status_code == 200
+            body = first.json()
+            assert body["inserted"] is True
+            assert body["candidateIndex"] == 0
+            job = body["job"]
+            assert job["intent"]["processorProfile"] == "jav"
+            assert job["intent"]["mediaType"] == "jav"
+            assert job["intent"]["code"] == "ABF-386"
+            assert job["intent"]["savePathCid"] == "42"
+            assert job["intent"]["metadata"]["monitorDownload"] is True
+
+            repeated = client.post(
+                "/v1/av/enqueue",
+                headers=_auth(token),
+                json={"schema": 1, "code": "abf-386"},
+            )
+            assert repeated.status_code == 200
+            assert repeated.json()["inserted"] is False
+            assert repeated.json()["job"]["jobId"] == job["jobId"]
+            assert client.post(
+                "/v1/av/enqueue",
+                headers=_auth(token),
+                json={"schema": 1, "code": "ABF-386", "candidateIndex": 9},
+            ).status_code == 422
+    finally:
+        store.close()
+
+
+def test_av_enqueue_reports_provider_failure_and_empty_results() -> None:
+    token = "f" * 32
+    store = QueueStore(":memory:")
+    app = create_app(
+        _settings(token),
+        store=store,
+        provider=_AvProvider(error=ProviderError("provider unavailable")),
+    )
+    try:
+        with TestClient(app) as client:
+            response = client.get("/v1/av/search?code=ABF-386", headers=_auth(token))
+            assert response.status_code == 502
+            assert "provider unavailable" not in response.text
+    finally:
+        store.close()
+
+    empty_store = QueueStore(":memory:")
+    empty_app = create_app(
+        _settings(token), store=empty_store, provider=_AvProvider(candidates=()),
+    )
+    try:
+        with TestClient(empty_app) as client:
+            response = client.post(
+                "/v1/av/enqueue",
+                headers=_auth(token),
+                json={"schema": 1, "code": "ABF-386"},
+            )
+            assert response.status_code == 404
+    finally:
+        empty_store.close()
 
 
 def test_api_auth_claim_and_idempotent_events() -> None:

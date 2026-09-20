@@ -70,6 +70,25 @@ BTIH Magnet 或 ED2K file 链接。主要路由如下：
 | `POST /v1/jobs/{jobId}/events` | 扩展回传任务进度和终态 |
 | `POST /v1/actions/claim` | 扩展按同一 worker 领取取消或目录同步动作 |
 | `POST /v1/actions/{actionId}/events` | 回传动作结果；`eventId` 幂等 |
+| `GET /v1/av/search?code=ABF-386` | 搜索番号并返回已校验的 Magnet 候选 |
+| `POST /v1/av/enqueue` | 搜索番号并将一个候选入本地持久队列，默认选择 `candidateIndex=0` |
+
+AV API 示例：
+
+```http
+GET /v1/av/search?code=ABF-386
+Authorization: Bearer <token>
+
+POST /v1/av/enqueue
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"schema":1,"code":"ABF-386","candidateIndex":0}
+```
+
+`/v1/av/enqueue` 的番号查询和 Magnet 校验在服务端完成；省略 `savePathCid` 时优先使用
+扩展同步的 `javbus` 默认 CID。相同番号与 BTIH 在活动状态下重复请求会返回已有任务，扩展随后按
+普通 `/v1/jobs/claim` 流程领取并提交 115。
 
 扩展使用的领取请求为：
 
@@ -136,7 +155,7 @@ Content-Type: application/json
 
 | 命令 | 用途 |
 |------|------|
-| `/av ABC-123` | 在 JavBus 查询番号，点击候选按钮后入队 |
+| `/av ABC-123` | 使用 Sukebei RSS 搜索番号资源，JavBus 提供元数据与备用磁力，点击候选按钮后入队 |
 | `/anime One Piece` | 使用 Nyaa RSS 查询关键词，点击 Magnet 候选按钮后入队 |
 | `/dir` 或 `/path` | 浏览目录树、选择当前保存目录 |
 | `/add <Magnet 或 ED2K>` | 将明确的 Magnet/ED2K 链接直接入队 |
@@ -172,6 +191,8 @@ Chrome 扩展扫描目录后，会把非敏感的路径、CID 和 revision 通�
 chat 和 user 记忆；候选按钮点击时使用该用户最新选择的目录。`/add <Magnet|ED2K>`
 直接加入队列，`/jobs` 查看自己的任务列表，进入详情后可重试失败任务或取消活动任务。
 
+`/av` 由 `AvSearchService` 聚合 Sukebei RSS 资源与 JavBus 元数据：Sukebei 结果优先，JavBus
+不可用时仍可使用 Sukebei 资源；Sukebei 不可用时则保留 JavBus 页面或 AJAX 返回的磁力。
 查询结果使用 JavBus 页面封面（若可用）和每个候选的一次性 opaque token 按钮；token 绑定
 chat、user、消息和 TTL，重复点击、转发到其他聊天或未授权用户都不会入队。任务状态通过
 编辑同一条状态消息反馈。
@@ -180,15 +201,17 @@ chat、user、消息和 TTL，重复点击、转发到其他聊天或未授权�
 `sourceSite=nyaa`、`mediaType=anime`、`processorProfile=anime`，`code` 为空，元数据包含
 原始标题、provider、BTIH 和 Nyaa detail URL。Nyaa 只读取配置的 HTTPS RSS 来源，按 BTIH 去重，
 并限制响应大小和结果数量；不做 HTML fallback、Torznab、翻页或订阅。Telegram polling 关闭或
-Bot token 未配置时，不会发起 Nyaa 请求。本版本保留现有 Nyaa RSS 能力，没有新增 RSS、订阅
-或自动搜索功能。
+Bot token 未配置时，不会发起 Nyaa 请求。Sukebei 使用同一个 Nyaa-compatible RSS parser，
+默认 category 为 `0_0`；Nyaa 动画 provider 默认 category 为 `1_0`。本版本没有新增 RSS
+订阅或自动搜索功能。
 
 JavBus 仅允许配置的 HTTPS 主机，最多跟随两次同源重定向，并限制响应大小。页面中
 由 `gid`/`uc` 脚本参数加载的 `ajax/uncledatoolsbyajax.php` 磁链也会按同源规则解析；
 不会绕过验证码、挑战页或其他反爬措施。
 
-Nyaa RSS 的 `PUSH115_NYAA_BASE_URL`、`PUSH115_NYAA_ALLOWED_HOSTS`、超时、响应大小和结果上限
-见 `.env.example`；allowlist 必须包含实际使用的 HTTPS 主机。
+Nyaa RSS 的 `PUSH115_NYAA_*` 与 AV 资源源的 `PUSH115_SUKEBEI_*` 配置见 `.env.example`；
+allowlist 必须包含实际使用的 HTTPS 主机。Sukebei 是 `/av` 的主资源源，JavBus 配置仍控制
+元数据及备用磁力请求。
 
 测试请注入 mock Telegram transport 和 provider；部署说明不代表已使用真实 Bot、
 JavBus 或 115 账号联调。

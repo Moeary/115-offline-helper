@@ -252,6 +252,13 @@ class Settings:
     nyaa_max_results: int = 20
     telegram_save_paths: tuple[TelegramSavePath, ...] = field(default_factory=tuple)
     telegram_token_file: Path = DEFAULT_TELEGRAM_TOKEN_FILE
+    sukebei_base_url: str = "https://sukebei.nyaa.si"
+    sukebei_allowed_hosts: frozenset[str] = field(
+        default_factory=lambda: frozenset({"sukebei.nyaa.si"})
+    )
+    sukebei_timeout_seconds: float = 15.0
+    sukebei_max_response_bytes: int = 2_000_000
+    sukebei_max_results: int = 20
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -307,6 +314,26 @@ class Settings:
         nyaa_hosts.add(parsed_nyaa.hostname.lower().rstrip("."))
         if parsed_nyaa.hostname.lower().rstrip(".") in {"nyaa.si", "www.nyaa.si"}:
             nyaa_hosts.update({"nyaa.si", "www.nyaa.si"})
+
+        sukebei_base_url = env(
+            "PUSH115_SUKEBEI_BASE_URL", "https://sukebei.nyaa.si"
+        ).rstrip("/")
+        parsed_sukebei = urlsplit(sukebei_base_url)
+        if (
+            parsed_sukebei.scheme.lower() != "https"
+            or not parsed_sukebei.hostname
+            or parsed_sukebei.username
+            or parsed_sukebei.password
+            or parsed_sukebei.query
+            or parsed_sukebei.fragment
+        ):
+            raise ValueError("PUSH115_SUKEBEI_BASE_URL 必须是无凭据的 HTTPS 地址")
+        sukebei_hosts = {
+            item.strip().lower().rstrip(".")
+            for item in env("PUSH115_SUKEBEI_ALLOWED_HOSTS", "").split(",")
+            if item.strip()
+        }
+        sukebei_hosts.add(parsed_sukebei.hostname.lower().rstrip("."))
 
         telegram_polling = env("PUSH115_TELEGRAM_POLLING", "0").lower() in {
             "1",
@@ -370,6 +397,21 @@ class Settings:
             nyaa_max_results=max(
                 1, min(100, int(env("PUSH115_NYAA_MAX_RESULTS", "20")))
             ),
+            sukebei_base_url=sukebei_base_url,
+            sukebei_allowed_hosts=frozenset(sukebei_hosts),
+            sukebei_timeout_seconds=max(
+                1.0, min(60.0, float(env("PUSH115_SUKEBEI_TIMEOUT_SECONDS", "15")))
+            ),
+            sukebei_max_response_bytes=max(
+                32_768,
+                min(
+                    8_000_000,
+                    int(env("PUSH115_SUKEBEI_MAX_RESPONSE_BYTES", "2000000")),
+                ),
+            ),
+            sukebei_max_results=max(
+                1, min(100, int(env("PUSH115_SUKEBEI_MAX_RESULTS", "20")))
+            ),
             telegram_save_paths=telegram_save_paths,
             telegram_token_file=telegram_token_file,
         )
@@ -402,7 +444,7 @@ class PairingStatus:
     def as_dict(self) -> dict[str, object]:
         return {
             "schema": 1,
-            "version": "1.14.0",
+            "version": "1.16.0",
             "paired": self.paired,
             "pairingAvailable": self.pairing_available,
             "expiresAt": self.expires_at,

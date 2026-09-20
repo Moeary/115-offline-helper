@@ -8,6 +8,7 @@ import binascii
 import json
 import math
 import re
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -31,18 +32,24 @@ from .db import (
     UnknownAction,
     UnknownJob,
 )
+from .normalize import dedupe_key, extract_btih, is_magnet, normalize_exact_code
 from .providers.javbus import JavBusProvider
-from .providers.nyaa import NyaaRssProvider
+from .providers.av_search import AvSearchService
+from .providers.base import ProviderError
+from .providers.nyaa import NyaaCompatibleRssProvider, SukebeiRssProvider
 from .schemas import (
     ActionClaimRequest,
     ActionCommandRequest,
     ActionEventRequest,
+    AvEnqueueRequest,
     ClaimRequest,
     BootstrapPairRequest,
     DirectoryRegistryRequest,
     dump_directory_registry,
     EventRequest,
+    IntentModel,
     TelegramRuntimeRequest,
+    model_dump,
 )
 from .telegram import TelegramError, TelegramService
 from .telegram_manager import TelegramManager
@@ -159,6 +166,75 @@ def _directory_registry_revision(registry: Any) -> int | None:
     return value
 
 
+def _av_field(value: object, name: str, default: Any = "") -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _av_candidate_payload(candidate: object) -> dict[str, str] | None:
+    url = str(_av_field(candidate, "url") or "").strip()
+    if not is_magnet(url):
+        return None
+    title = str(_av_field(candidate, "title") or "").strip()[:512]
+    btih = extract_btih(url)
+    payload = {
+        "url": url,
+        "title": title,
+        "btih": btih,
+        "dedupeKey": dedupe_key(url),
+    }
+    for key, aliases in (
+        ("guid", ("guid",)),
+        ("detailUrl", ("detail_url", "detailUrl")),
+    ):
+        value = ""
+        for alias in aliases:
+            value = str(_av_field(candidate, alias) or "").strip()
+            if value:
+                break
+        if value:
+            payload[key] = value[:2048]
+    return payload
+
+
+def _av_result_payload(metadata: object, requested_code: str) -> dict[str, Any]:
+    code = normalize_exact_code(_av_field(metadata, "code")) or requested_code
+    title = str(_av_field(metadata, "title") or "").strip()[:512]
+    page_url = str(
+        _av_field(
+            metadata,
+            "page_url",
+            _av_field(
+                metadata,
+                "pageUrl",
+                _av_field(metadata, "feed_url", _av_field(metadata, "feedUrl")),
+            ),
+        )
+        or ""
+    ).strip()[:2048]
+    cover_url = str(
+        _av_field(metadata, "cover_url", _av_field(metadata, "coverUrl")) or ""
+    ).strip()[:2048]
+    raw_candidates = _av_field(metadata, "candidates", ())
+    if not isinstance(raw_candidates, (list, tuple)):
+        raw_candidates = ()
+    candidates = [
+        candidate
+        for raw in raw_candidates
+        if (candidate := _av_candidate_payload(raw)) is not None
+    ]
+    return {
+        "schema": 1,
+        "code": code,
+        "title": title or code,
+        "pageUrl": page_url,
+        "coverUrl": cover_url,
+        "candidates": candidates,
+        "candidateCount": len(candidates),
+    }
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -170,9 +246,10 @@ def create_app(
     """Create an isolated app instance suitable for production or tests.
 
     Dependencies can be injected by tests without making network calls.  The
-    default factory constructs a JavBus provider and a replaceable Telegram
-    manager. Telegram validation and polling are restored during lifespan;
-    changing the token never requires a FastAPI restart.
+    default factory constructs an AV aggregation service (Sukebei resources
+    plus best-effort JavBus metadata) and a replaceable Telegram manager.
+    Telegram validation and polling are restored during lifespan; changing the
+    token never requires a FastAPI restart.
     """
 
     settings = settings or Settings.from_env()
@@ -190,14 +267,26 @@ def create_app(
         initial_token=settings.bearer_token,
         auto_open_pairing=False,
     )
-    av_provider = provider or JavBusProvider(
-        settings.javbus_base_url,
-        allowed_hosts=settings.javbus_allowed_hosts,
-        timeout_seconds=settings.javbus_timeout_seconds,
-        max_response_bytes=settings.javbus_max_response_bytes,
-    )
+    if provider is None:
+        javbus_provider = JavBusProvider(
+            settings.javbus_base_url,
+            allowed_hosts=settings.javbus_allowed_hosts,
+            timeout_seconds=settings.javbus_timeout_seconds,
+            max_response_bytes=settings.javbus_max_response_bytes,
+        )
+        sukebei_provider = SukebeiRssProvider(
+            settings.sukebei_base_url,
+            category="0_0",
+            allowed_hosts=settings.sukebei_allowed_hosts,
+            timeout_seconds=settings.sukebei_timeout_seconds,
+            max_response_bytes=settings.sukebei_max_response_bytes,
+            max_results=settings.sukebei_max_results,
+        )
+        av_provider = AvSearchService(sukebei_provider, javbus_provider)
+    else:
+        av_provider = provider
     owns_anime_provider = anime_provider is None
-    nyaa_provider = anime_provider or NyaaRssProvider(
+    nyaa_provider = anime_provider or NyaaCompatibleRssProvider(
         settings.nyaa_base_url,
         allowed_hosts=settings.nyaa_allowed_hosts,
         timeout_seconds=settings.nyaa_timeout_seconds,
@@ -256,7 +345,7 @@ def create_app(
 
     app = FastAPI(
         title="115 Offline Helper Bridge",
-        version="1.14.0",
+        version="1.16.0",
         docs_url=None,
         redoc_url=None,
         lifespan=lifespan,
@@ -454,6 +543,91 @@ def create_app(
             "revision": payload.revision,
             "updated": True,
             "idempotent": False,
+        }
+
+    def default_av_save_path() -> str | None:
+        getter = getattr(queue, "get_directory_registry", None)
+        registry = getter() if callable(getter) else None
+        if not isinstance(registry, dict):
+            return None
+        defaults = registry.get("siteDefaults")
+        if not isinstance(defaults, dict):
+            return None
+        javbus = defaults.get("javbus")
+        if not isinstance(javbus, dict):
+            return None
+        value = str(javbus.get("savePathCid") or "").strip()
+        return value if re.fullmatch(r"(?:0|[1-9][0-9]{0,63})", value) else None
+
+    async def lookup_av(code: str) -> dict[str, Any]:
+        normalized = normalize_exact_code(code)
+        if not normalized:
+            raise HTTPException(status_code=422, detail="code 不是可识别的番号")
+        try:
+            metadata = await av_provider.lookup(normalized)
+        except ProviderError as error:
+            raise HTTPException(status_code=502, detail="AV 资源暂时不可用") from error
+        except Exception as error:
+            raise HTTPException(status_code=502, detail="AV 查询失败") from error
+        return _av_result_payload(metadata, normalized)
+
+    @app.get("/v1/av/search")
+    async def search_av(
+        code: str = Query(..., min_length=1, max_length=64),
+        _auth: None = Depends(require_auth),
+    ) -> dict[str, Any]:
+        return await lookup_av(code)
+
+    @app.post("/v1/av/enqueue")
+    async def enqueue_av(
+        payload: AvEnqueueRequest,
+        _auth: None = Depends(require_auth),
+    ) -> dict[str, Any]:
+        result = await lookup_av(payload.code)
+        candidates = result["candidates"]
+        if not candidates:
+            raise HTTPException(status_code=404, detail="未找到可用 Magnet")
+        if payload.candidate_index >= len(candidates):
+            raise HTTPException(status_code=422, detail="candidateIndex 超出搜索结果")
+
+        candidate = candidates[payload.candidate_index]
+        save_path_cid = payload.save_path_cid or default_av_save_path()
+        raw_intent = {
+            "jobId": f"api-av-{uuid.uuid4()}",
+            "sourceSite": "javbus",
+            "mediaType": "jav",
+            "processorProfile": "jav",
+            "url": candidate["url"],
+            "title": result["title"],
+            "code": result["code"],
+            "metadata": {
+                "provider": "av-search",
+                "pageUrl": result["pageUrl"],
+                "coverUrl": result["coverUrl"],
+                "candidateTitle": candidate["title"],
+                "btih": candidate["btih"],
+                "pageCode": result["code"],
+                "monitorDownload": True,
+            },
+            "savePathCid": save_path_cid,
+        }
+        try:
+            intent = model_dump(IntentModel.model_validate(raw_intent))
+            record, inserted = queue.enqueue(
+                intent,
+                candidate_key=f"api:av:{result['code']}:{candidate['dedupeKey']}",
+                telegram_chat_id=None,
+                telegram_user_id=None,
+                telegram_message_id=None,
+            )
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail="AV 入队意图无效") from error
+        return {
+            "schema": 1,
+            "inserted": inserted,
+            "candidateIndex": payload.candidate_index,
+            "candidate": candidate,
+            "job": _job_status_payload(record),
         }
 
     @app.get("/v1/jobs")
