@@ -688,7 +688,7 @@ async function refreshTelegramStatus() {
 		return null
 	}
 	try {
-		const status = await Push115.BridgeClient.getTelegramStatus(token)
+		const status = await Push115.Background.BridgeClient.getTelegramStatus(token)
 		renderTelegramStatus(status)
 		return status
 	} catch (error) {
@@ -705,7 +705,7 @@ async function refreshTelegramStatus() {
 async function refreshBridgeOnboarding(requestPermission = false) {
 	try {
 		if (requestPermission) await ensureBridgeHostPermission()
-		const status = await Push115.BridgeClient.bootstrapStatus()
+		const status = await Push115.Background.BridgeClient.bootstrapStatus()
 		renderBridgeBootstrapStatus(status)
 		await refreshTelegramStatus()
 		return status
@@ -731,7 +731,7 @@ async function pairBridgeFromOptions() {
 	if (button) button.disabled = true
 	try {
 		await ensureBridgeHostPermission()
-		await Push115.BridgeClient.pairBridge(code)
+		await Push115.Background.BridgeClient.pairBridge(code)
 		const values = await chrome.storage.local.get([CONFIG_KEYS.BRIDGE_TOKEN, CONFIG_KEYS.BRIDGE_ENABLED, CONFIG_KEYS.BRIDGE_PAIRED])
 		configCache = { ...configCache, ...values }
 		fillForm()
@@ -756,7 +756,7 @@ async function updateTelegramFromOptions(action, details = {}) {
 	const message = document.getElementById('push115-telegram-status-message')
 	if (button) button.disabled = true
 	try {
-		const clientAction = Push115.BridgeClient[action + 'Telegram']
+		const clientAction = Push115.Background.BridgeClient[action + 'Telegram']
 		if (typeof clientAction !== 'function') throw new Error(t('telegram_action_failed') + action)
 		// start/stop/restart use the already validated token stored by Bridge.
 		// Passing the wrapper's default `{}` as the first positional argument
@@ -796,7 +796,7 @@ async function configureTelegramFromOptions() {
 	const message = document.getElementById('push115-telegram-status-message')
 	if (button) button.disabled = true
 	try {
-		const status = await Push115.BridgeClient.configureTelegram({ enabled: true, botToken: token })
+		const status = await Push115.Background.BridgeClient.configureTelegram({ enabled: true, botToken: token })
 		if (input) input.value = ''
 		renderTelegramStatus(status)
 		if (message) {

@@ -15,11 +15,16 @@ class FakeManagerTransport:
         self.username = username
         self.closed = False
         self.messages: list[tuple[int, str]] = []
+        self.commands: list[dict[str, str]] = []
 
     async def get_me(self):
         if self.token == "bad":
             raise TelegramError("invalid token")
         return {"id": 123, "is_bot": True, "username": self.username}
+
+    async def set_my_commands(self, commands):
+        self.commands = [dict(item) for item in commands]
+        return True
 
     async def get_updates(self, *, offset, timeout):
         return []
@@ -60,17 +65,15 @@ def test_manager_configures_without_exposing_token(tmp_path) -> None:
             assert status["enabled"] is False
             assert status["botUsername"] == "demo115_bot"
             assert status["ownerBound"] is False
-            assert status["claimUrl"].startswith(
-                "https://t.me/demo115_bot?start=claim_"
-            )
             assert "secret" not in str(status)
             assert (tmp_path / "telegram_bot.token").read_text().strip() == "123456:secret"
-
-            nonce = status["claimUrl"].split("claim_", 1)[1]
-            assert manager.claim_owner(nonce, 11, 22) is True
+            assert "claimUrl" not in status
+            assert manager.bind_owner(11, 22) is True
             assert manager.status()["ownerBound"] is True
-            assert manager.status()["claimUrl"] is None
-            assert manager.claim_owner(nonce, 99, 100) is False
+            assert manager.bind_owner(99, 100) is False
+            assert [item["command"] for item in manager._transport.commands] == [
+                "start", "av", "anime", "dir", "add", "jobs", "help"
+            ]
         finally:
             await manager.close()
             store.close()
@@ -101,7 +104,7 @@ def test_manager_rejects_invalid_token_and_keeps_old_configuration(tmp_path) -> 
     asyncio.run(scenario())
 
 
-def test_service_accepts_only_current_owner_claim(tmp_path) -> None:
+def test_service_auto_claims_first_start_and_scopes_owner(tmp_path) -> None:
     async def scenario() -> None:
         store = QueueStore(":memory:")
         manager = TelegramManager(
@@ -111,22 +114,21 @@ def test_service_accepts_only_current_owner_claim(tmp_path) -> None:
             transport_factory=_factory,
         )
         try:
-            status = await manager.configure("good-token", enabled=False)
-            nonce = status["claimUrl"].split("claim_", 1)[1]
+            await manager.configure("good-token", enabled=False)
             transport = FakeManagerTransport("good-token")
             service = TelegramService(
                 store,
                 object(),
                 transport,
                 owner_getter=manager._owner,
-                claim_handler=manager.claim_owner,
+                owner_setter=manager.bind_owner,
             )
             result = await service.handle_update(
                 {
                     "message": {
                         "chat": {"id": 11},
                         "from": {"id": 22},
-                        "text": f"/start claim_{nonce}",
+                        "text": "/start",
                     }
                 }
             )

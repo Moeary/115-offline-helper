@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 
-from .db import JobRecord, QueueStore
+from .db import JobRecord, QueueStore, SYNC_DIRECTORIES_ACTION
 from .normalize import (
     dedupe_key,
     is_ed2k,
@@ -45,16 +45,18 @@ _ADD_COMMAND = re.compile(
 )
 _DIR_COMMAND = re.compile(r"^/(?:dir|path)(?:@[A-Za-z0-9_]{1,64})?\s*$", re.IGNORECASE)
 _JOBS_COMMAND = re.compile(r"^/jobs(?:@[A-Za-z0-9_]{1,64})?\s*$", re.IGNORECASE)
+_HELP_COMMAND = re.compile(r"^/help(?:@[A-Za-z0-9_]{1,64})?\s*$", re.IGNORECASE)
 _START_COMMAND = re.compile(
-    r"^/start(?:@[A-Za-z0-9_]{1,64})?(?:\s+([A-Za-z0-9_-]{1,128}))?\s*$",
+    r"^/start(?:@[A-Za-z0-9_]{1,64})?(?:\s+\S+)?\s*$",
     re.IGNORECASE,
 )
-_CLAIM_PAYLOAD = re.compile(r"^claim_([A-Za-z0-9_-]{16,96})$")
 _MAX_CANDIDATES = 24
 _MAX_CAPTION = 1024
 _MAX_BUTTON_TEXT = 56
 _MAX_JOBS = 10
 _MAX_DIRECTORY_PAGE_SIZE = 8
+_DIRECTORY_SYNC_TTL_SECONDS = 15 * 60
+_DIRECTORY_SYNC_TIMEOUT_SECONDS = 60
 _CALLBACK_KINDS = frozenset(
     {"candidate", "dir", "dir_page", "job_detail", "retry", "cancel"}
 )
@@ -67,6 +69,11 @@ class TelegramError(RuntimeError):
 
 class TelegramTransport(Protocol):
     async def get_me(self) -> Mapping[str, Any]:
+        ...
+
+    async def set_my_commands(
+        self, commands: Sequence[Mapping[str, str]]
+    ) -> Any:
         ...
 
     async def get_updates(self, *, offset: int | None, timeout: int) -> list[dict[str, Any]]:
@@ -149,6 +156,29 @@ class HttpTelegramTransport:
         if not isinstance(result, Mapping):
             raise TelegramError("Telegram getMe 返回格式无效")
         return result
+
+    async def set_my_commands(
+        self, commands: Sequence[Mapping[str, str]]
+    ) -> Any:
+        normalized: list[dict[str, str]] = []
+        for item in commands:
+            if not isinstance(item, Mapping):
+                continue
+            command = str(item.get("command", "")).strip().lower()
+            description = str(item.get("description", "")).strip()
+            if not re.fullmatch(r"[a-z0-9_]{1,32}", command) or not description:
+                raise TelegramError("Telegram 命令菜单格式无效")
+            normalized.append({"command": command, "description": description[:256]})
+        if not normalized:
+            raise TelegramError("Telegram 命令菜单不能为空")
+        return await self.request("setMyCommands", {"commands": normalized})
+
+    async def setMyCommands(
+        self, commands: Sequence[Mapping[str, str]]
+    ) -> Any:
+        """Compatibility spelling mirroring the Bot API method name."""
+
+        return await self.set_my_commands(commands)
 
     async def request(self, method: str, payload: Mapping[str, Any] | None = None) -> Any:
         """Call one Bot API method without putting the token in error text."""
@@ -318,8 +348,11 @@ class TelegramService:
         callback_ttl_seconds: int = 900,
         poll_timeout: int = 25,
         owner_getter: Any | None = None,
+        owner_setter: Any | None = None,
         claim_handler: Any | None = None,
         bot_username: str = "",
+        directory_sync_ttl_seconds: int = _DIRECTORY_SYNC_TTL_SECONDS,
+        directory_sync_timeout_seconds: int = _DIRECTORY_SYNC_TIMEOUT_SECONDS,
         clock: Any = time.time,
     ) -> None:
         self.store = store
@@ -343,8 +376,18 @@ class TelegramService:
         self.callback_ttl_seconds = max(60, min(int(callback_ttl_seconds), 86400))
         self.poll_timeout = max(0, min(int(poll_timeout), 50))
         self.owner_getter = owner_getter
+        self.owner_setter = owner_setter
+        # ``claim_handler`` is retained as a harmless constructor
+        # compatibility slot for pre-1.12 callers.  Normal operation uses
+        # the direct first-/start owner bind above and never parses a nonce.
         self.claim_handler = claim_handler
         self.bot_username = str(bot_username or "").strip().lstrip("@").strip()
+        self.directory_sync_ttl_seconds = max(
+            60, min(int(directory_sync_ttl_seconds), 86400)
+        )
+        self.directory_sync_timeout_seconds = max(
+            15, min(int(directory_sync_timeout_seconds), 900)
+        )
         self.clock = clock
         saved_offset = None
         get_state = getattr(store, "get_state", None)
@@ -357,6 +400,22 @@ class TelegramService:
         self._next_update_id: int | None = saved_offset
         self._poll_stop = asyncio.Event()
         self._status_lock = asyncio.Lock()
+
+    @staticmethod
+    def _help_text() -> str:
+        return (
+            "115 Offline Helper\n\n"
+            "/start · 打开首页并在首次使用时绑定当前账号\n"
+            "/av <番号> · 搜索番号\n"
+            "/anime <关键词> · 搜索动漫\n"
+            "/dir · 选择保存目录\n"
+            "/add <Magnet 或 ED2K> · 添加任务\n"
+            "/jobs · 查看任务\n"
+            "/help · 显示帮助"
+        )
+
+    async def _send_home(self, chat_id: int) -> Mapping[str, Any]:
+        return await self.transport.send_message(chat_id, self._help_text())
 
     def authorized(self, chat_id: object, user_id: object) -> bool:
         chat = _int(chat_id)
@@ -398,6 +457,102 @@ class TelegramService:
         if isinstance(nested, Mapping):
             return nested
         return value
+
+    def _directory_registry_is_fresh(self) -> bool:
+        registry = self._latest_directory_registry()
+        if registry is None:
+            return False
+        raw_scanned = registry.get("scannedAt", registry.get("scanned_at"))
+        try:
+            scanned = float(raw_scanned)
+        except (TypeError, ValueError):
+            return False
+        # The browser contract uses epoch milliseconds.  Accept seconds for
+        # older local snapshots without weakening the freshness check.
+        if scanned > 100_000_000_000:
+            scanned /= 1000.0
+        age = float(self.clock()) - scanned
+        # A future timestamp is treated as fresh; this also keeps deterministic
+        # test clocks and mildly skewed local clocks from forcing a needless
+        # browser round trip.  Only elapsed time expires a snapshot.
+        return age <= self.directory_sync_ttl_seconds
+
+    @classmethod
+    def _directory_tree_text(cls, registry: Mapping[str, Any]) -> str:
+        entries = cls._registry_directory_entries(registry)
+        if not entries:
+            return "115 目录已同步，但当前没有可用目录。"
+        by_parent: dict[str | None, list[dict[str, Any]]] = {}
+        for entry in entries:
+            parent = entry.get("parentCid")
+            by_parent.setdefault(parent, []).append(entry)
+        for children in by_parent.values():
+            children.sort(key=lambda item: (int(item.get("depth", 0)), str(item.get("path", ""))))
+        roots = by_parent.get(None) or by_parent.get("0") or list(entries[:1])
+        lines = ["115 目录已同步："]
+        seen: set[str] = set()
+
+        def visit(entry: Mapping[str, Any], depth: int) -> None:
+            cid = str(entry.get("cid", "")).strip()
+            if not cid or cid in seen or len(lines) >= 180:
+                return
+            seen.add(cid)
+            label = _clip(entry.get("label") or entry.get("name") or cid, 128)
+            lines.append(f"{'  ' * min(depth, 24)}📁 {label}（CID {cid}）")
+            for child in by_parent.get(cid, ()):
+                visit(child, depth + 1)
+
+        for root in roots:
+            visit(root, 0)
+        if len(seen) < len(entries) and len(lines) < 180:
+            for entry in entries:
+                visit(entry, 0)
+        return _clip("\n".join(lines), 4096)
+
+    async def _request_directory_sync(
+        self, message: Mapping[str, Any], chat_id: int, user_id: int
+    ) -> dict[str, Any] | None:
+        requester = getattr(self.store, "request_directory_sync", None)
+        if not callable(requester):
+            return None
+        source_message_id = _message_id(message)
+        request_id = f"sync-directories:{chat_id}:{user_id}:{source_message_id or 0}"
+        try:
+            action, replay = requester(
+                chat_id=chat_id,
+                user_id=user_id,
+                message_id=source_message_id,
+                request_id=request_id,
+                timeout_seconds=self.directory_sync_timeout_seconds,
+                now=float(self.clock()),
+            )
+            sent = await self.transport.send_message(
+                chat_id,
+                "正在同步 115 目录……",
+            )
+            status_message_id = _message_id(sent)
+            if status_message_id is not None:
+                attach = getattr(self.store, "attach_directory_sync_message", None)
+                if callable(attach):
+                    attach(action.action_id, status_message_id)
+            return {
+                "handled": True,
+                "kind": SYNC_DIRECTORIES_ACTION,
+                "actionId": action.action_id,
+                "status": action.status,
+                "messageId": status_message_id,
+                "duplicate": bool(replay),
+            }
+        except Exception:
+            await self.transport.send_message(
+                chat_id,
+                "目录同步请求创建失败，请稍后重试。",
+            )
+            return {
+                "handled": True,
+                "kind": SYNC_DIRECTORIES_ACTION,
+                "error": "sync_request_failed",
+            }
 
     @staticmethod
     def _registry_directory_entries(
@@ -1307,50 +1462,57 @@ class TelegramService:
     async def _handle_command(self, message: Mapping[str, Any]) -> dict[str, Any]:
         chat_id, user_id = self._chat_user(message)
         text = str(message.get("text", "") or "").strip()
-        start_match = _START_COMMAND.fullmatch(text)
-        if start_match and self.claim_handler is not None:
-            claim_payload = str(start_match.group(1) or "").strip()
-            claim_match = _CLAIM_PAYLOAD.fullmatch(claim_payload)
-            if chat_id is not None and user_id is not None and claim_match:
-                claimed = False
+        if _START_COMMAND.fullmatch(text):
+            if chat_id is None or user_id is None:
+                return {"handled": True, "error": "invalid_message"}
+            owner = None
+            if self.owner_getter is not None:
                 try:
-                    claimed = bool(
-                        self.claim_handler(
-                            claim_match.group(1),
-                            chat_id,
-                            user_id,
-                        )
-                    )
+                    owner = self.owner_getter()
                 except Exception:
-                    claimed = False
-                if claimed:
+                    owner = None
+            if self.owner_getter is not None and not isinstance(owner, Mapping):
+                bound = False
+                if callable(self.owner_setter):
+                    try:
+                        bound = bool(self.owner_setter(chat_id, user_id))
+                    except Exception:
+                        bound = False
+                if not bound:
                     await self.transport.send_message(
                         chat_id,
-                        "✅ 已绑定为管理员。",
+                        "Bridge 尚未完成管理员绑定，请稍后重试。",
                     )
-                    return {
-                        "handled": True,
-                        "kind": "owner_claim",
-                        "ownerBound": True,
-                    }
-                await self.transport.send_message(
-                    chat_id,
-                    "绑定链接已失效，请在 Bridge 设置中重新生成。",
-                )
+                    return {"handled": True, "error": "owner_bind_failed"}
+                await self._send_home(chat_id)
                 return {
                     "handled": True,
                     "kind": "owner_claim",
-                    "ownerBound": False,
-                    "error": "invalid_claim",
+                    "ownerBound": True,
                 }
             if not self.authorized(chat_id, user_id):
                 return {"ignored": True, "reason": "unauthorized"}
+            await self._send_home(chat_id)
+            return {
+                "handled": True,
+                "kind": "start",
+                "ownerBound": self.owner_getter is not None,
+            }
         if not self.authorized(chat_id, user_id):
             return {"ignored": True, "reason": "unauthorized"}
+        if _HELP_COMMAND.fullmatch(text):
+            await self._send_home(chat_id)
+            return {"handled": True, "kind": "help"}
         add_match = _ADD_COMMAND.fullmatch(text)
         if add_match:
             return await self._handle_add(message, add_match.group(1))
         if _DIR_COMMAND.fullmatch(text):
+            if not self._directory_registry_is_fresh():
+                sync_result = await self._request_directory_sync(
+                    message, chat_id, user_id
+                )
+                if sync_result is not None:
+                    return sync_result
             result = await self._send_directory_picker(chat_id, user_id)
             return {"handled": True, "kind": "dir", "messageId": _message_id(result)}
         if _JOBS_COMMAND.fullmatch(text):
@@ -1904,11 +2066,83 @@ class TelegramService:
             text += f"\n{_clip(job.error_message, 800)}"
         return _clip(text, 4096)
 
+    async def _notify_directory_sync_once(self) -> int:
+        expire = getattr(self.store, "expire_directory_sync_actions", None)
+        if callable(expire):
+            try:
+                expire(now=float(self.clock()))
+            except Exception:
+                pass
+        listing = getattr(self.store, "list_directory_sync_actions", None)
+        if not callable(listing):
+            return 0
+        try:
+            actions = listing()
+        except Exception:
+            return 0
+        delivered = 0
+        for action in actions:
+            payload = action.payload if isinstance(action.payload, Mapping) else {}
+            chat_id = _int(payload.get("chatId"))
+            user_id = _int(payload.get("userId"))
+            status_message_id = _int(payload.get("statusMessageId"))
+            if chat_id is None or user_id is None or not self.authorized(chat_id, user_id):
+                continue
+            if action.status in {"applied", "noop"}:
+                registry = self._latest_directory_registry()
+                if isinstance(action.result, Mapping):
+                    result_registry = action.result.get("registry")
+                    if not isinstance(result_registry, Mapping):
+                        result_registry = action.result.get("directoryRegistry")
+                    if isinstance(result_registry, Mapping):
+                        registry = result_registry
+                    elif isinstance(action.result.get("directories"), list):
+                        registry = action.result
+                text = (
+                    self._directory_tree_text(registry)
+                    if isinstance(registry, Mapping)
+                    else "目录同步完成，但未收到目录快照，请稍后重试。"
+                )
+            elif action.error_code == "sync_timeout":
+                text = "Chrome 扩展未响应，目录同步超时。请打开扩展后重试 /dir。"
+            elif action.status == "uncertain":
+                text = "目录同步结果不明确，请打开扩展确认后重试 /dir。"
+            else:
+                text = _clip(
+                    action.error_message or "目录同步失败，请打开扩展后重试 /dir。",
+                    4096,
+                )
+            try:
+                if status_message_id is not None and hasattr(
+                    self.transport, "edit_message_text"
+                ):
+                    await self.transport.edit_message_text(
+                        chat_id,
+                        status_message_id,
+                        text,
+                    )
+                else:
+                    sent = await self.transport.send_message(chat_id, text)
+                    new_message_id = _message_id(sent)
+                    if new_message_id is not None:
+                        attach = getattr(self.store, "attach_directory_sync_message", None)
+                        if callable(attach):
+                            attach(action.action_id, new_message_id)
+                marker = getattr(self.store, "mark_action_notified", None)
+                if callable(marker):
+                    marker(action.action_id, now=float(self.clock()))
+                delivered += 1
+            except Exception:
+                # Leave the marker absent so the next poll retries the edit.
+                continue
+        return delivered
+
     async def notify_status_once(self) -> int:
         """Deliver changed queue states to their originating Telegram chats."""
 
         delivered = 0
         async with self._status_lock:
+            delivered += await self._notify_directory_sync_once()
             jobs = self.store.list_jobs(
                 telegram_only=True,
                 include_terminal=True,

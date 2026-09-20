@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -32,7 +33,7 @@ def _settings(tmp_path: Path) -> Settings:
     )
 
 
-def test_bootstrap_pair_is_one_time_and_rotates_bearer(tmp_path: Path) -> None:
+def test_bootstrap_connect_returns_one_persistent_bearer(tmp_path: Path) -> None:
     store = QueueStore(":memory:")
     app = create_app(_settings(tmp_path), store=store, provider=object())
     try:
@@ -41,32 +42,48 @@ def test_bootstrap_pair_is_one_time_and_rotates_bearer(tmp_path: Path) -> None:
             assert status.status_code == 200
             assert status.json()["version"] == "1.11.0"
             assert status.json()["paired"] is False
-            assert status.json()["pairingAvailable"] is True
+            assert status.json()["pairingAvailable"] is False
             assert "pairingCode" not in status.json()
 
-            code = app.state.pairing_manager.current_code
-            assert code and len(code.replace("-", "")) == 8
-            paired = client.post(
-                "/bootstrap/pair",
-                json={"schema": 1, "pairingCode": code, "clientId": "test"},
-            )
-            assert paired.status_code == 200
-            token = paired.json()["bearerToken"]
+            connected = client.post("/bootstrap/connect")
+            assert connected.status_code == 200
+            token = connected.json()["bearerToken"]
             assert len(token) >= 32
-            assert paired.json()["paired"] is True
-            assert paired.json()["pairingAvailable"] is False
+            assert connected.json()["paired"] is True
+            assert connected.json()["connected"] is True
+
+            repeated = client.post("/bootstrap/connect")
+            assert repeated.status_code == 200
+            assert repeated.json()["bearerToken"] == token
+            assert "pairingCode" not in repeated.json()
 
             assert client.get("/v1/health").status_code == 401
             assert client.get(
                 "/v1/health", headers={"Authorization": f"Bearer {token}"}
             ).status_code == 200
-            again = client.post(
-                "/bootstrap/pair",
-                json={"schema": 1, "pairingCode": code},
-            )
-            assert again.status_code == 409
     finally:
         store.close()
+
+
+def test_bootstrap_connect_survives_bridge_restart(tmp_path: Path) -> None:
+    settings = replace(
+        _settings(tmp_path),
+        db_path=tmp_path / "bridge.sqlite3",
+    )
+    first_app = create_app(settings, provider=object())
+    with TestClient(first_app) as client:
+        first = client.post("/bootstrap/connect")
+        assert first.status_code == 200
+        token = first.json()["bearerToken"]
+
+    second_app = create_app(settings, provider=object())
+    with TestClient(second_app) as client:
+        second = client.post("/bootstrap/connect")
+        assert second.status_code == 200
+        assert second.json()["bearerToken"] == token
+        assert client.get(
+            "/v1/health", headers={"Authorization": f"Bearer {token}"}
+        ).status_code == 200
 
 
 def test_pairing_window_can_be_reopened_only_explicitly(tmp_path: Path) -> None:
@@ -74,7 +91,7 @@ def test_pairing_window_can_be_reopened_only_explicitly(tmp_path: Path) -> None:
     app = create_app(_settings(tmp_path), store=store, provider=object())
     try:
         with TestClient(app) as client:
-            code = app.state.pairing_manager.current_code
+            code = app.state.pairing_manager.open_window(force=True)
             assert code
             first = client.post("/bootstrap/pair", json={"pairingCode": code})
             assert first.status_code == 200
@@ -106,7 +123,7 @@ def test_runtime_telegram_endpoint_validates_and_hides_token(tmp_path: Path) -> 
     app = create_app(_settings(tmp_path), store=store, provider=object())
     try:
         with TestClient(app) as client:
-            pairing_code = app.state.pairing_manager.current_code
+            pairing_code = app.state.pairing_manager.open_window(force=True)
             paired = client.post("/bootstrap/pair", json={"pairingCode": pairing_code})
             token = paired.json()["bearerToken"]
             app.state.telegram_manager._transport_factory = _RuntimeTransport

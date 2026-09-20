@@ -79,6 +79,47 @@ def test_api_auth_claim_and_idempotent_events() -> None:
     store.close()
 
 
+def test_api_claims_and_completes_directory_sync_action() -> None:
+    token = "s" * 32
+    store = QueueStore(":memory:")
+    app = create_app(_settings(token), store=store, provider=object())
+    action, replay = store.request_directory_sync(
+        chat_id=11,
+        user_id=22,
+        message_id=7,
+        request_id="api-sync-1",
+        now=10,
+    )
+    assert replay is False
+    try:
+        with TestClient(app) as client:
+            claimed = client.post(
+                "/v1/actions/claim",
+                headers=_auth(token),
+                json={"schema": 1, "workerId": "browser"},
+            )
+            assert claimed.status_code == 200
+            payload = claimed.json()["action"]
+            assert payload["actionType"] == "sync_directories"
+            assert payload["jobId"] == action.job_id
+
+            event = client.post(
+                f"/v1/actions/{action.action_id}/events",
+                headers=_auth(token),
+                json={
+                    "schema": 1,
+                    "leaseId": payload["leaseId"],
+                    "eventId": "api-sync-event",
+                    "state": "applied",
+                    "result": {"revision": 2},
+                },
+            )
+            assert event.status_code == 200
+            assert event.json()["state"] == "applied"
+    finally:
+        store.close()
+
+
 def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 

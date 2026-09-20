@@ -16,6 +16,52 @@ def _intent(index: int) -> dict[str, str]:
     }
 
 
+def test_directory_sync_action_reuses_action_protocol_without_becoming_a_job() -> None:
+    store = QueueStore(":memory:")
+    try:
+        action, replay = store.request_directory_sync(
+            chat_id=11,
+            user_id=22,
+            message_id=99,
+            request_id="sync-1",
+            now=100,
+        )
+        assert replay is False
+        assert action.action_type == "sync_directories"
+        assert action.payload["sourceMessageId"] == 99
+        assert store.list_jobs() == []
+
+        same, replay = store.request_directory_sync(
+            chat_id=11,
+            user_id=22,
+            message_id=99,
+            request_id="sync-1",
+            now=101,
+        )
+        assert replay is True
+        assert same.action_id == action.action_id
+
+        claimed = store.claim_action("directory-worker", now=101)
+        assert claimed is not None
+        assert claimed.action_id == action.action_id
+        completed, replay = store.append_action_event(
+            action.action_id,
+            lease_id=claimed.lease_id or "",
+            event_id="sync-event-1",
+            state="applied",
+            result={"revision": 4},
+            now=102,
+        )
+        assert replay is False
+        assert completed.status == "applied"
+        assert store.get_job(action.job_id).status == "completed"
+        assert len(store.list_directory_sync_actions()) == 1
+        store.mark_action_notified(action.action_id, now=103)
+        assert store.list_directory_sync_actions() == []
+    finally:
+        store.close()
+
+
 def test_claim_is_atomic_and_same_worker_recovery_keeps_lease() -> None:
     store = QueueStore(":memory:", default_lease_seconds=30)
     try:
@@ -269,6 +315,119 @@ def test_v1_database_migrates_without_losing_jobs_or_events(tmp_path) -> None:
         }.issubset(tables)
     finally:
         store.close()
+
+
+def test_legacy_action_schema_migrates_atomically_on_reopen(tmp_path) -> None:
+    path = tmp_path / "legacy-actions.sqlite3"
+    store = QueueStore(path)
+    try:
+        job, _ = store.enqueue(
+            _intent(99),
+            candidate_key="legacy-action",
+            telegram_chat_id=11,
+            telegram_user_id=22,
+            telegram_message_id=33,
+            now=1,
+        )
+    finally:
+        store.close()
+
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.executescript(
+            """
+            DROP TABLE action_notifications;
+            DROP INDEX action_requests_action_idx;
+            DROP TABLE action_requests;
+            DROP TABLE action_events;
+            DROP INDEX actions_claim_idx;
+            DROP INDEX actions_job_idx;
+            ALTER TABLE actions RENAME TO actions_legacy;
+            CREATE TABLE actions (
+                action_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                action_type TEXT NOT NULL CHECK (action_type IN ('cancel_task')),
+                status TEXT NOT NULL CHECK (
+                    status IN ('queued', 'claimed', 'applied', 'failed', 'uncertain', 'noop')
+                ),
+                request_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                worker_id TEXT,
+                lease_id TEXT,
+                lease_until REAL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                result_json TEXT,
+                error_code TEXT,
+                error_message TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                UNIQUE(job_id, action_type, request_id)
+            );
+            INSERT INTO actions(
+                action_id, job_id, action_type, status, request_id,
+                payload_json, attempt_count, created_at, updated_at
+            ) VALUES (
+                'legacy-action', 'JOB_ID_PLACEHOLDER', 'cancel_task', 'queued',
+                'legacy-request', '{}', 0, 2, 2
+            );
+            DROP TABLE actions_legacy;
+            CREATE TABLE action_events (
+                event_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action_id TEXT NOT NULL REFERENCES actions(action_id) ON DELETE CASCADE,
+                event_id TEXT NOT NULL,
+                lease_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                UNIQUE(action_id, event_id)
+            );
+            CREATE TABLE action_requests (
+                request_id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                action_id TEXT NOT NULL REFERENCES actions(action_id) ON DELETE CASCADE,
+                created_at REAL NOT NULL
+            );
+            """
+            .replace("JOB_ID_PLACEHOLDER", job.job_id)
+        )
+        connection.execute(
+            """
+            INSERT INTO action_events(
+                action_id, event_id, lease_id, state, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("legacy-action", "legacy-event", "legacy-lease", "queued", "{}", 3),
+        )
+        connection.execute(
+            """
+            INSERT INTO action_requests(request_id, job_id, action_id, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("legacy-request", job.job_id, "legacy-action", 2),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    reopened = QueueStore(path)
+    try:
+        action = reopened.get_action("legacy-action")
+        assert action is not None
+        assert action.action_type == "cancel_task"
+        assert reopened._connection.execute(
+            "SELECT COUNT(*) FROM action_events"
+        ).fetchone()[0] == 1
+        assert reopened._connection.execute(
+            "SELECT COUNT(*) FROM action_requests"
+        ).fetchone()[0] == 1
+        action_sql = reopened._connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'actions'"
+        ).fetchone()[0]
+        assert "sync_directories" in action_sql
+        assert not reopened._connection.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        reopened.close()
 
 
 def test_directory_registry_is_persisted_as_safe_bridge_state(tmp_path) -> None:

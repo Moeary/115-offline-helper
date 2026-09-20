@@ -13,7 +13,6 @@ import hmac
 import json
 import os
 import re
-import secrets
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Callable
@@ -24,6 +23,15 @@ from .telegram import HttpTelegramTransport, TelegramError, TelegramService
 _OWNER_STATE_KEY = "telegram.owner"
 _CONFIG_STATE_KEY = "telegram.runtime.v1"
 _BOT_USERNAME = re.compile(r"^[A-Za-z0-9_]{3,64}$")
+_DEFAULT_COMMANDS = (
+    {"command": "start", "description": "打开首页并绑定管理员"},
+    {"command": "av", "description": "搜索番号"},
+    {"command": "anime", "description": "搜索动漫"},
+    {"command": "dir", "description": "选择保存目录"},
+    {"command": "add", "description": "添加 Magnet 或 ED2K"},
+    {"command": "jobs", "description": "查看任务"},
+    {"command": "help", "description": "显示帮助"},
+)
 
 
 def _write_secret(path: Path, value: str) -> None:
@@ -91,7 +99,6 @@ class TelegramManager:
         self._service: TelegramService | None = None
         self._poll_task: asyncio.Task[Any] | None = None
         self._lock = asyncio.Lock()
-        self._claim_nonce = ""
         self._last_error = ""
 
         raw_config = self._get_state(_CONFIG_STATE_KEY)
@@ -99,8 +106,6 @@ class TelegramManager:
             self._enabled = bool(raw_config.get("enabled", self._enabled))
             self._bot_username = self._safe_username(raw_config.get("botUsername"))
         self._token = _read_secret(self.token_file) or self._initial_token
-        if self._token:
-            self._new_claim_nonce()
 
     def _get_state(self, key: str) -> Any:
         getter = getattr(self.store, "get_state", None)
@@ -129,10 +134,6 @@ class TelegramManager:
         username = str(value or "").strip().lstrip("@").strip()
         return username if _BOT_USERNAME.fullmatch(username) else ""
 
-    def _new_claim_nonce(self) -> str:
-        self._claim_nonce = secrets.token_urlsafe(24)
-        return self._claim_nonce
-
     def _owner(self) -> dict[str, int] | None:
         value = self._get_state(_OWNER_STATE_KEY)
         if not isinstance(value, Mapping):
@@ -144,13 +145,10 @@ class TelegramManager:
             return None
         return {"chatId": chat_id, "userId": user_id}
 
-    def claim_owner(self, nonce: object, chat_id: object, user_id: object) -> bool:
-        """Atomically-ish consume the current in-memory claim nonce."""
+    def bind_owner(self, chat_id: object, user_id: object) -> bool:
+        """Bind the first ``/start`` sender as the sole local owner."""
 
-        candidate = str(nonce or "").strip()
-        if not candidate or not self._claim_nonce or self._owner() is not None:
-            return False
-        if not hmac.compare_digest(candidate, self._claim_nonce):
+        if self._owner() is not None:
             return False
         try:
             normalized_chat = int(chat_id)
@@ -161,14 +159,11 @@ class TelegramManager:
             _OWNER_STATE_KEY,
             {"chatId": normalized_chat, "userId": normalized_user},
         )
-        self._claim_nonce = ""
         return True
 
-    def _claim_url(self) -> str | None:
-        owner = self._owner()
-        if owner is not None or not self._bot_username or not self._claim_nonce:
-            return None
-        return f"https://t.me/{self._bot_username}?start=claim_{self._claim_nonce}"
+    # Compatibility alias for callers that used the old manager method.  It
+    # now takes the normal two Telegram identity fields and no nonce.
+    claim_owner = bind_owner
 
     def status(self) -> dict[str, Any]:
         owner = self._owner()
@@ -178,7 +173,6 @@ class TelegramManager:
             "configured": bool(self._token),
             "botUsername": self._bot_username or None,
             "ownerBound": owner is not None,
-            "claimUrl": self._claim_url(),
         }
         if self._last_error:
             payload["error"] = self._last_error
@@ -210,6 +204,11 @@ class TelegramManager:
             username = self._safe_username(metadata.get("username"))
             if not username:
                 raise TelegramError("Telegram bot 缺少有效 username")
+            register = getattr(transport, "set_my_commands", None)
+            if not callable(register):
+                register = getattr(transport, "setMyCommands", None)
+            if callable(register):
+                await register(_DEFAULT_COMMANDS)
             return transport, username
         except Exception:
             close = getattr(transport, "aclose", None)
@@ -234,7 +233,7 @@ class TelegramManager:
             callback_ttl_seconds=self._callback_ttl_seconds,
             poll_timeout=self._poll_timeout,
             owner_getter=self._owner,
-            claim_handler=self.claim_owner,
+            owner_setter=self.bind_owner,
             bot_username=self._bot_username,
         )
 
@@ -296,8 +295,6 @@ class TelegramManager:
                 if not _read_secret(self.token_file):
                     _write_secret(self.token_file, self._token)
                 self._transport, self._bot_username = await self._validate_token(self._token)
-                if not self._claim_nonce and self._owner() is None:
-                    self._new_claim_nonce()
                 self._last_error = ""
                 if self._enabled:
                     await self._start_locked()
@@ -342,9 +339,8 @@ class TelegramManager:
             self._token = next_token
             self._bot_username = username
             self._transport = new_transport
-            if token_changed or self._owner() is None:
+            if token_changed:
                 self._set_state(_OWNER_STATE_KEY, None)
-                self._new_claim_nonce()
             self._enabled = bool(True if enabled is None else enabled)
             self._last_error = ""
             _write_secret(self.token_file, self._token)

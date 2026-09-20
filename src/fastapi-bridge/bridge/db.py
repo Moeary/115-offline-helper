@@ -38,6 +38,8 @@ class StateConflict(QueueError):
 TERMINAL_STATES = frozenset({"completed", "failed", "uncertain", "cancelled"})
 JOB_TERMINAL_STATES = TERMINAL_STATES
 ACTION_TERMINAL_STATES = frozenset({"applied", "failed", "uncertain", "noop"})
+SYNC_DIRECTORIES_ACTION = "sync_directories"
+ACTION_ONLY_CANDIDATE_PREFIX = "__bridge_action__:"
 DIRECTORY_REGISTRY_STATE_KEY = "directory_registry.v1"
 _DIRECTORY_REGISTRY_MAX_BYTES = 1024 * 1024
 RUNTIME_CONFIG_STATE_KEY = "runtime_config.v1"
@@ -276,6 +278,9 @@ class QueueStore:
                 self._migrate_to_v2()
             else:
                 self._create_auxiliary_schema()
+            self._ensure_action_sync_schema()
+            # Keep the existing queue schema version stable; the action
+            # constraint migration is intentionally transparent to clients.
             self._connection.execute("PRAGMA user_version = 2")
 
     def _jobs_support_v2(self, sql: str) -> bool:
@@ -467,7 +472,9 @@ class QueueStore:
             CREATE TABLE IF NOT EXISTS actions (
                 action_id TEXT PRIMARY KEY,
                 job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
-                action_type TEXT NOT NULL CHECK (action_type IN ('cancel_task')),
+                action_type TEXT NOT NULL CHECK (
+                    action_type IN ('cancel_task', 'sync_directories')
+                ),
                 status TEXT NOT NULL CHECK (
                     status IN ('queued', 'claimed', 'applied', 'failed', 'uncertain', 'noop')
                 ),
@@ -509,6 +516,11 @@ class QueueStore:
             CREATE INDEX IF NOT EXISTS action_requests_action_idx
                 ON action_requests(action_id);
 
+            CREATE TABLE IF NOT EXISTS action_notifications (
+                action_id TEXT PRIMARY KEY REFERENCES actions(action_id) ON DELETE CASCADE,
+                notified_at REAL NOT NULL
+            );
+
             -- Keep idempotency for actions created before this mapping table
             -- existed.  A malformed legacy database with duplicate request
             -- IDs keeps its first durable association.
@@ -516,6 +528,162 @@ class QueueStore:
                 SELECT request_id, job_id, action_id, created_at FROM actions;
             """
         )
+
+    def _ensure_action_sync_schema(self) -> None:
+        """Migrate the pre-1.12 action CHECK constraint in-place.
+
+        Released databases only allowed ``cancel_task``.  SQLite cannot alter
+        a CHECK constraint, so rebuild just the action tables while retaining
+        all action/event/idempotency rows.  New databases already have the
+        expanded definition and take the fast path.
+        """
+
+        row = self._connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'actions'"
+        ).fetchone()
+        sql = str(row[0] or "") if row else ""
+        if "sync_directories" in sql.lower():
+            self._connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS action_notifications (
+                    action_id TEXT PRIMARY KEY REFERENCES actions(action_id) ON DELETE CASCADE,
+                    notified_at REAL NOT NULL
+                );
+                """
+            )
+            return
+
+        self._connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self._connection.execute("BEGIN IMMEDIATE")
+            self._connection.execute("DROP INDEX IF EXISTS actions_claim_idx")
+            self._connection.execute("DROP INDEX IF EXISTS actions_job_idx")
+            self._connection.execute("DROP INDEX IF EXISTS action_requests_action_idx")
+            # This table is new in the expanded schema and is empty on a
+            # legacy database.  Drop the provisional table created by the
+            # auxiliary-schema pass before rebuilding its foreign key.
+            self._connection.execute("DROP TABLE IF EXISTS action_notifications")
+            self._connection.execute(
+                "CREATE TABLE action_events_backup AS SELECT * FROM action_events"
+            )
+            self._connection.execute(
+                "CREATE TABLE action_requests_backup AS SELECT * FROM action_requests"
+            )
+            self._connection.execute("DROP TABLE action_events")
+            self._connection.execute("DROP TABLE action_requests")
+            self._connection.execute("ALTER TABLE actions RENAME TO actions_legacy")
+            self._connection.execute(
+                """
+                CREATE TABLE actions (
+                    action_id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                    action_type TEXT NOT NULL CHECK (
+                        action_type IN ('cancel_task', 'sync_directories')
+                    ),
+                    status TEXT NOT NULL CHECK (
+                        status IN ('queued', 'claimed', 'applied', 'failed', 'uncertain', 'noop')
+                    ),
+                    request_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    worker_id TEXT,
+                    lease_id TEXT,
+                    lease_until REAL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    result_json TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    UNIQUE(job_id, action_type, request_id)
+                )
+                """
+            )
+            self._connection.execute(
+                """
+                INSERT INTO actions(
+                    action_id, job_id, action_type, status, request_id,
+                    payload_json, worker_id, lease_id, lease_until,
+                    attempt_count, result_json, error_code, error_message,
+                    created_at, updated_at
+                )
+                SELECT action_id, job_id, action_type, status, request_id,
+                       payload_json, worker_id, lease_id, lease_until,
+                       attempt_count, result_json, error_code, error_message,
+                       created_at, updated_at
+                FROM actions_legacy
+                """
+            )
+            self._connection.execute("DROP TABLE actions_legacy")
+            self._connection.execute(
+                """
+                CREATE INDEX actions_claim_idx
+                    ON actions(status, lease_until, created_at, action_id)
+                """
+            )
+            self._connection.execute(
+                """
+                CREATE INDEX actions_job_idx
+                    ON actions(job_id, created_at)
+                """
+            )
+            self._connection.execute(
+                """
+                CREATE TABLE action_events (
+                    event_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action_id TEXT NOT NULL REFERENCES actions(action_id) ON DELETE CASCADE,
+                    event_id TEXT NOT NULL,
+                    lease_id TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    UNIQUE(action_id, event_id)
+                )
+                """
+            )
+            self._connection.execute(
+                """
+                INSERT INTO action_events
+                    SELECT * FROM action_events_backup
+                """
+            )
+            self._connection.execute("DROP TABLE action_events_backup")
+            self._connection.execute(
+                """
+                CREATE TABLE action_requests (
+                    request_id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                    action_id TEXT NOT NULL REFERENCES actions(action_id) ON DELETE CASCADE,
+                    created_at REAL NOT NULL
+                )
+                """
+            )
+            self._connection.execute(
+                """
+                INSERT INTO action_requests
+                    SELECT * FROM action_requests_backup
+                """
+            )
+            self._connection.execute("DROP TABLE action_requests_backup")
+            self._connection.execute(
+                """
+                CREATE INDEX action_requests_action_idx
+                    ON action_requests(action_id)
+                """
+            )
+            self._connection.execute(
+                """
+                CREATE TABLE action_notifications (
+                    action_id TEXT PRIMARY KEY REFERENCES actions(action_id) ON DELETE CASCADE,
+                    notified_at REAL NOT NULL
+                )
+                """
+            )
+            self._connection.execute("COMMIT")
+        except Exception:
+            self._connection.execute("ROLLBACK")
+            raise
+        finally:
+            self._connection.execute("PRAGMA foreign_keys = ON")
 
     def _row_to_job(self, row: sqlite3.Row | None) -> JobRecord | None:
         if row is None:
@@ -662,6 +830,11 @@ class QueueStore:
         bounded_limit = max(1, min(int(limit), 5000))
         clauses: list[str] = []
         parameters: list[Any] = []
+        # Directory-sync actions use a synthetic job row so they can reuse
+        # the durable action/event protocol.  They must never appear as
+        # ordinary download jobs or be claimed by the download worker.
+        clauses.append("(candidate_key IS NULL OR candidate_key NOT LIKE ?)")
+        parameters.append(f"{ACTION_ONLY_CANDIDATE_PREFIX}%")
         if telegram_only:
             clauses.append("telegram_chat_id IS NOT NULL")
         if not include_terminal:
@@ -700,6 +873,8 @@ class QueueStore:
         bounded_limit = max(1, min(int(limit), 100))
         clauses: list[str] = []
         parameters: list[Any] = []
+        clauses.append("(candidate_key IS NULL OR candidate_key NOT LIKE ?)")
+        parameters.append(f"{ACTION_ONLY_CANDIDATE_PREFIX}%")
         allowed = set(JOB_TERMINAL_STATES) | {
             "queued", "claimed", "accepted", "progress"
         }
@@ -752,8 +927,12 @@ class QueueStore:
         """Return one user's Telegram jobs, newest first, using a keyset cursor."""
 
         bounded_limit = max(1, min(int(limit), 100))
-        parameters: list[Any] = [int(chat_id), int(user_id)]
-        clauses = ["telegram_chat_id = ?", "telegram_user_id = ?"]
+        parameters: list[Any] = [int(chat_id), int(user_id), f"{ACTION_ONLY_CANDIDATE_PREFIX}%"]
+        clauses = [
+            "telegram_chat_id = ?",
+            "telegram_user_id = ?",
+            "(candidate_key IS NULL OR candidate_key NOT LIKE ?)",
+        ]
         if cursor is not None:
             try:
                 created_at = float(cursor[0])
@@ -1079,6 +1258,293 @@ class QueueStore:
                 self._connection.execute("ROLLBACK")
                 raise
 
+    def request_directory_sync(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        message_id: int | None = None,
+        request_id: str | None = None,
+        timeout_seconds: int = 60,
+        now: float | None = None,
+    ) -> tuple[ActionRecord, bool]:
+        """Create an action for the browser to refresh the directory index.
+
+        Directory refresh is not a download job, but it uses the same durable
+        action claim/event protocol.  A synthetic, action-only job preserves
+        the existing ``actions.job_id`` foreign key and lets old clients keep
+        decoding the claim envelope.  Such rows are hidden from the normal
+        job queue and are never returned by ``claim``.
+        """
+
+        chat = int(chat_id)
+        user = int(user_id)
+        source_message = None if message_id is None else int(message_id)
+        if chat == 0 or user == 0:
+            raise ValueError("chat_id、user_id 无效")
+        if source_message is not None and source_message < 0:
+            raise ValueError("message_id 无效")
+        timeout = int(timeout_seconds)
+        if not 15 <= timeout <= 900:
+            raise ValueError("timeout_seconds 必须在 15 到 900 秒之间")
+        now = _now() if now is None else float(now)
+        request = str(request_id or "").strip()
+        if not request:
+            request = f"sync-directories:{chat}:{user}:{source_message or 0}"
+        if len(request) > 128:
+            raise ValueError("request_id 过长")
+        candidate_key = f"{ACTION_ONLY_CANDIDATE_PREFIX}{SYNC_DIRECTORIES_ACTION}:{chat}:{user}"
+        payload = {
+            "schema": 1,
+            "kind": SYNC_DIRECTORIES_ACTION,
+            "chatId": chat,
+            "userId": user,
+            "sourceMessageId": source_message,
+            "originalMessageId": source_message,
+            "messageId": source_message,
+            "telegramMessageId": source_message,
+            "statusMessageId": None,
+            "timeoutSeconds": timeout,
+            "requestedAt": now,
+        }
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                mapped = self._get_action_request_locked(request)
+                if mapped is not None:
+                    existing = self._get_action_locked(str(mapped["action_id"]))
+                    if existing is None:
+                        raise StateConflict("动作请求记录无效")
+                    self._connection.execute("COMMIT")
+                    return existing, True
+
+                pending_row = self._connection.execute(
+                    """
+                    SELECT actions.*
+                    FROM actions
+                    JOIN jobs ON jobs.job_id = actions.job_id
+                    WHERE actions.action_type = ?
+                      AND actions.status IN ('queued', 'claimed')
+                      AND jobs.telegram_chat_id = ?
+                      AND jobs.telegram_user_id = ?
+                    ORDER BY actions.created_at ASC, actions.action_id ASC
+                    LIMIT 1
+                    """,
+                    (SYNC_DIRECTORIES_ACTION, chat, user),
+                ).fetchone()
+                if pending_row is not None:
+                    pending = self._row_to_action(pending_row)
+                    assert pending is not None
+                    self._connection.execute(
+                        """
+                        INSERT INTO action_requests(
+                            request_id, job_id, action_id, created_at
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (request, pending.job_id, pending.action_id, now),
+                    )
+                    self._connection.execute("COMMIT")
+                    return pending, True
+
+                # Keep the public jobId compatible with the browser action
+                # envelope (it must begin with an ASCII alphanumeric).  The
+                # private candidate key is what marks this synthetic row as
+                # action-only for the normal download queue.
+                job_id = f"sync-action-{uuid.uuid4()}"
+                action_id = str(uuid.uuid4())
+                intent = {
+                    "jobId": job_id,
+                    "sourceSite": "telegram",
+                    "actionType": SYNC_DIRECTORIES_ACTION,
+                    "processorProfile": "generic",
+                }
+                self._connection.execute(
+                    """
+                    INSERT INTO jobs (
+                        job_id, intent_json, status, attempt_count,
+                        created_at, updated_at,
+                        telegram_chat_id, telegram_user_id, telegram_message_id,
+                        candidate_key
+                    ) VALUES (?, ?, 'queued', 0, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        _json(intent),
+                        now,
+                        now,
+                        chat,
+                        user,
+                        source_message,
+                        candidate_key,
+                    ),
+                )
+                self._connection.execute(
+                    """
+                    INSERT INTO actions(
+                        action_id, job_id, action_type, status, request_id,
+                        payload_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)
+                    """,
+                    (action_id, job_id, SYNC_DIRECTORIES_ACTION, request, _json(payload), now, now),
+                )
+                self._connection.execute(
+                    """
+                    INSERT INTO action_requests(request_id, job_id, action_id, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (request, job_id, action_id, now),
+                )
+                action = self._get_action_locked(action_id)
+                self._connection.execute("COMMIT")
+                assert action is not None
+                return action, False
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+
+    # Descriptive compatibility spelling used by early action prototypes.
+    request_sync_directories = request_directory_sync
+
+    def attach_directory_sync_message(self, action_id: str, message_id: int) -> ActionRecord:
+        """Persist the bot message that will be edited with the final tree."""
+
+        action_id = str(action_id).strip()
+        message_id = int(message_id)
+        if not action_id or message_id < 0:
+            raise ValueError("actionId、messageId 无效")
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM actions WHERE action_id = ? AND action_type = ?",
+                (action_id, SYNC_DIRECTORIES_ACTION),
+            ).fetchone()
+            if row is None:
+                raise UnknownAction("找不到 directory sync action")
+            payload = json.loads(row["payload_json"] or "{}")
+            if not isinstance(payload, dict):
+                payload = {}
+            payload["statusMessageId"] = message_id
+            self._connection.execute(
+                "UPDATE actions SET payload_json = ?, updated_at = ? WHERE action_id = ?",
+                (_json(payload), _now(), action_id),
+            )
+            action = self._get_action_locked(action_id)
+            assert action is not None
+            return action
+
+    def list_directory_sync_actions(self) -> list[ActionRecord]:
+        """Return terminal sync actions whose Telegram message is unnotified."""
+
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT actions.*
+                FROM actions
+                LEFT JOIN action_notifications
+                  ON action_notifications.action_id = actions.action_id
+                WHERE actions.action_type = ?
+                  AND actions.status IN ('applied', 'failed', 'uncertain', 'noop')
+                  AND action_notifications.action_id IS NULL
+                ORDER BY actions.updated_at ASC, actions.action_id ASC
+                LIMIT 500
+                """,
+                (SYNC_DIRECTORIES_ACTION,),
+            ).fetchall()
+            return [record for row in rows if (record := self._row_to_action(row))]
+
+    def mark_action_notified(self, action_id: str, *, now: float | None = None) -> None:
+        action_id = str(action_id).strip()
+        if not action_id:
+            raise ValueError("actionId 不能为空")
+        timestamp = _now() if now is None else float(now)
+        with self._lock:
+            self._connection.execute(
+                "INSERT OR IGNORE INTO action_notifications(action_id, notified_at) VALUES (?, ?)",
+                (action_id, timestamp),
+            )
+
+    def expire_directory_sync_actions(
+        self, *, now: float | None = None, limit: int = 100
+    ) -> int:
+        """Close browser sync actions that received no event in time."""
+
+        timestamp = _now() if now is None else float(now)
+        bounded_limit = max(1, min(int(limit), 500))
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                rows = self._connection.execute(
+                    """
+                    SELECT action_id, job_id, lease_id, payload_json
+                    FROM actions
+                    WHERE action_type = ? AND status IN ('queued', 'claimed')
+                    ORDER BY created_at ASC, action_id ASC
+                    LIMIT ?
+                    """,
+                    (SYNC_DIRECTORIES_ACTION, bounded_limit),
+                ).fetchall()
+                expired: list[sqlite3.Row] = []
+                for row in rows:
+                    payload = json.loads(row["payload_json"] or "{}")
+                    timeout = int(payload.get("timeoutSeconds", 60) or 60) if isinstance(payload, dict) else 60
+                    created = self._connection.execute(
+                        "SELECT created_at FROM actions WHERE action_id = ?",
+                        (row["action_id"],),
+                    ).fetchone()
+                    if created is not None and float(created[0]) + timeout <= timestamp:
+                        expired.append(row)
+                for row in expired:
+                    action_id = str(row["action_id"])
+                    error_payload = {
+                        "status": "failed",
+                        "errorCode": "sync_timeout",
+                        "errorMessage": "Chrome 扩展未响应，目录同步超时",
+                    }
+                    self._connection.execute(
+                        """
+                        UPDATE actions
+                        SET status = 'failed', lease_until = NULL,
+                            result_json = ?, error_code = 'sync_timeout',
+                            error_message = ?, updated_at = ?
+                        WHERE action_id = ? AND status IN ('queued', 'claimed')
+                        """,
+                        (_json(error_payload), error_payload["errorMessage"], timestamp, action_id),
+                    )
+                    event_id = f"system-timeout-{action_id}"
+                    self._connection.execute(
+                        """
+                        INSERT OR IGNORE INTO action_events(
+                            action_id, event_id, lease_id, state, payload_json, created_at
+                        ) VALUES (?, ?, 'system', 'failed', ?, ?)
+                        """,
+                        (
+                            action_id,
+                            event_id,
+                            _json({
+                                "schema": 1,
+                                "leaseId": "system",
+                                "eventId": event_id,
+                                "state": "failed",
+                                "result": error_payload,
+                            }),
+                            timestamp,
+                        ),
+                    )
+                    self._connection.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'failed', worker_id = NULL, lease_id = NULL,
+                            lease_until = NULL, error_code = 'sync_timeout',
+                            error_message = ?, updated_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (error_payload["errorMessage"], timestamp, row["job_id"]),
+                    )
+                self._connection.execute("COMMIT")
+                return len(expired)
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+
     def claim_action(
         self,
         worker_id: str,
@@ -1101,19 +1567,45 @@ class QueueStore:
                     SELECT actions.*
                     FROM actions
                     JOIN jobs ON jobs.job_id = actions.job_id
-                    WHERE jobs.worker_id IS NOT NULL AND jobs.worker_id <> ''
-                      AND (
-                          (actions.status = 'queued' AND jobs.worker_id = ?)
-                          OR (
-                              actions.status = 'claimed' AND actions.worker_id = ?
-                              AND actions.lease_until IS NOT NULL
-                              AND actions.lease_until <= ?
-                          )
-                      )
+                    WHERE (
+                        (
+                            actions.action_type = ?
+                            AND actions.status = 'queued'
+                        )
+                        OR (
+                            actions.action_type = ?
+                            AND actions.status = 'claimed'
+                            AND actions.worker_id = ?
+                            AND actions.lease_until IS NOT NULL
+                            AND actions.lease_until <= ?
+                        )
+                        OR (
+                            actions.action_type <> ?
+                            AND jobs.worker_id IS NOT NULL
+                            AND jobs.worker_id <> ''
+                            AND (
+                                (actions.status = 'queued' AND jobs.worker_id = ?)
+                                OR (
+                                    actions.status = 'claimed' AND actions.worker_id = ?
+                                    AND actions.lease_until IS NOT NULL
+                                    AND actions.lease_until <= ?
+                                )
+                            )
+                        )
+                    )
                     ORDER BY actions.created_at ASC, actions.action_id ASC
                     LIMIT 1
                     """,
-                    (worker_id, worker_id, now),
+                    (
+                        SYNC_DIRECTORIES_ACTION,
+                        SYNC_DIRECTORIES_ACTION,
+                        worker_id,
+                        now,
+                        SYNC_DIRECTORIES_ACTION,
+                        worker_id,
+                        worker_id,
+                        now,
+                    ),
                 ).fetchone()
                 if row is None:
                     self._connection.execute("COMMIT")
@@ -1212,6 +1704,26 @@ class QueueStore:
                     # durable ACK must still close the action even when the
                     # job became completed/failed/uncertain first.  Preserve
                     # that terminal job state and record the action outcome.
+                if action.action_type == SYNC_DIRECTORIES_ACTION:
+                    sync_status = "completed" if state in {"applied", "noop"} else (
+                        "uncertain" if state == "uncertain" else "failed"
+                    )
+                    self._connection.execute(
+                        """
+                        UPDATE jobs
+                        SET status = ?, worker_id = NULL, lease_id = NULL,
+                            lease_until = NULL,
+                            error_code = ?, error_message = ?, updated_at = ?
+                        WHERE job_id = ?
+                        """,
+                        (
+                            sync_status,
+                            error_code,
+                            error_message,
+                            now,
+                            action.job_id,
+                        ),
+                    )
                 self._connection.execute(
                     """
                     UPDATE actions
@@ -1376,19 +1888,21 @@ class QueueStore:
                     """
                     SELECT *
                     FROM jobs
-                    WHERE status = 'queued'
+                    WHERE (candidate_key IS NULL OR candidate_key NOT LIKE ?)
+                      AND (
+                           status = 'queued'
                        OR (
                            status IN ('claimed', 'accepted', 'progress')
                            AND worker_id = ?
                            AND lease_until IS NOT NULL
                            AND lease_until <= ?
-                       )
+                       ))
                     ORDER BY
                         CASE WHEN status = 'queued' THEN 0 ELSE 1 END,
                         created_at ASC
                     LIMIT 1
                     """,
-                    (worker_id, now),
+                    (f"{ACTION_ONLY_CANDIDATE_PREFIX}%", worker_id, now),
                 ).fetchone()
                 if row is None:
                     self._connection.execute("COMMIT")

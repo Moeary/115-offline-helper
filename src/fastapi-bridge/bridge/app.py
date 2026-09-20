@@ -187,6 +187,7 @@ def create_app(
         runtime_config,
         token_file=settings.token_file,
         initial_token=settings.bearer_token,
+        auto_open_pairing=False,
     )
     av_provider = provider or JavBusProvider(
         settings.javbus_base_url,
@@ -308,6 +309,28 @@ def create_app(
         """Return non-secret local onboarding state without Bearer auth."""
 
         return pairing.status().as_dict()
+
+    @app.post("/bootstrap/connect")
+    async def bootstrap_connect() -> dict[str, Any]:
+        """Return the durable token for a browser on the loopback bridge.
+
+        The application is deliberately restricted to the loopback address by
+        ``Settings``.  This endpoint is therefore only a local bootstrap
+        primitive; all queue/runtime APIs remain Bearer-protected.
+        """
+
+        if settings.host not in {"127.0.0.1", "localhost", "::1"}:
+            raise HTTPException(status_code=403, detail="bootstrap 仅允许本机访问")
+        try:
+            token = pairing.connect(client_id="localhost")
+        except ValueError as error:
+            raise HTTPException(status_code=503, detail="本地 bearer credential 不可用") from error
+        return {
+            "schema": 1,
+            "connected": True,
+            "paired": pairing.status().paired,
+            "bearerToken": token,
+        }
 
     @app.post("/bootstrap/pair")
     async def bootstrap_pair(payload: BootstrapPairRequest) -> dict[str, Any]:

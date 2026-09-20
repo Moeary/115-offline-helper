@@ -452,6 +452,7 @@ class PairingManager:
         *,
         token_file: str | Path | None,
         initial_token: str,
+        auto_open_pairing: bool = False,
         clock: callable = time.time,
         code_factory: callable | None = None,
         token_factory: callable | None = None,
@@ -480,9 +481,11 @@ class PairingManager:
         if bool(state.get("paired")):
             self._current_code = None
             return
-        # A raw code is intentionally not recoverable after process restart.
-        # Opening a fresh window is what lets the CLI print a usable code.
-        self._open_window_locked(now=self._now())
+        # Normal bridge startup no longer opens a short-lived pairing window.
+        # The old pairing API remains available for an explicit migration
+        # command/test by calling ``open_window``.
+        if auto_open_pairing:
+            self._open_window_locked(now=self._now())
 
     @staticmethod
     def _generate_code() -> str:
@@ -659,5 +662,41 @@ class PairingManager:
                     "closed": True,
                 }
             )
+            self._current_code = None
+            return token
+
+    def connect(self, *, client_id: str = "local") -> str:
+        """Return the durable local bearer credential.
+
+        ``/bootstrap/connect`` is the normal localhost onboarding path.  It
+        deliberately does not rotate the token and does not require a
+        human-entered pairing code.  Marking the legacy pairing state as
+        paired prevents an old pairing window from becoming an alternate
+        route after the browser has connected.
+        """
+
+        with self._lock:
+            now = self._now()
+            token = self._current_token
+            if not token or len(token) < 32:
+                raise ValueError("bearer token 至少需要 32 个字符")
+            persist = getattr(self.runtime_store, "set_bearer_token", None)
+            if callable(persist):
+                persist(token)
+            if self.token_file is not None:
+                persist_secret(self.token_file, token)
+            current = self._get_pairing_state()
+            safe_client_id = str(client_id or "local").strip()[:128] or "local"
+            if not bool(current.get("paired")):
+                self._save_pairing_state(
+                    {
+                        "schema": 1,
+                        "paired": True,
+                        "pairedAt": now,
+                        "pairedClientId": safe_client_id,
+                        "closed": True,
+                        "bootstrap": "connect",
+                    }
+                )
             self._current_code = None
             return token

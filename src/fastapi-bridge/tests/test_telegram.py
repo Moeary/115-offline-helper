@@ -194,6 +194,15 @@ def test_add_supports_magnet_ed2k_and_reuses_latest_directory_for_old_candidate(
         clock=lambda: 50,
     )
     try:
+        store.set_directory_registry(
+            _telegram_registry(
+                1,
+                [
+                    {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+                    {"cid": "9", "parentCid": "0", "name": "动画", "path": "/动画", "depth": 1},
+                ],
+            )
+        )
         magnet = "magnet:?xt=urn:btih:" + "c" * 32 + "&dn=Direct"
         direct = asyncio.run(
             service.handle_update({"message": _message("/add " + magnet, message_id=1)})
@@ -216,7 +225,16 @@ def test_add_supports_magnet_ed2k_and_reuses_latest_directory_for_old_candidate(
         )
         assert directory["kind"] == "dir"
         directory_message_id = transport.next_id
-        directory_data = transport.messages[-1][3]["inline_keyboard"][1][0]["callback_data"]
+        directory_keyboard = transport.messages[-1][3]["inline_keyboard"]
+        browse_data = directory_keyboard[1][0]["callback_data"]
+        browsed = asyncio.run(
+            service.handle_update(
+                {"callback_query": _callback(browse_data, directory_message_id, callback_id="dir-browse")}
+            )
+        )
+        assert browsed["parentCid"] == "9"
+        directory_message_id = transport.next_id
+        directory_data = transport.messages[-1][3]["inline_keyboard"][0][0]["callback_data"]
         selected = asyncio.run(
             service.handle_update(
                 {"callback_query": _callback(directory_data, directory_message_id, callback_id="dir")}
@@ -596,9 +614,17 @@ def test_telegram_reads_dynamic_registry_without_restart_and_keeps_static_fallba
         clock=lambda: 50,
     )
     try:
+        store.set_directory_registry(
+            _telegram_registry(
+                1,
+                [
+                    {"cid": "0", "parentCid": None, "name": "旧根目录", "path": "/", "depth": 0},
+                ],
+            )
+        )
         static = asyncio.run(service.handle_update({"message": _message("/dir")}))
         assert static["kind"] == "dir"
-        assert "旧根目录" in transport.messages[-1][2]
+        assert "保存目录" in transport.messages[-1][2]
 
         store.set_directory_registry(
             _telegram_registry(
@@ -873,3 +899,75 @@ def test_telegram_empty_registry_prompts_sync_and_blocks_add_and_candidate() -> 
         assert store.list_jobs() == []
     finally:
         store.close()
+
+
+def test_telegram_dir_sync_action_edits_prompt_and_reports_timeout() -> None:
+    clock_value = [1700000100.0]
+    store = QueueStore(":memory:")
+    transport = FakeTransport()
+    service = TelegramService(
+        store,
+        FakeProvider(),
+        transport,
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        clock=lambda: clock_value[0],
+    )
+    try:
+        requested = asyncio.run(
+            service.handle_update({"message": _message("/dir", message_id=77)})
+        )
+        assert requested["kind"] == "sync_directories"
+        assert transport.messages[-1][2] == "正在同步 115 目录……"
+        action = store.get_action(requested["actionId"])
+        assert action is not None
+        assert action.payload["sourceMessageId"] == 77
+        assert action.payload["statusMessageId"] == transport.next_id
+
+        claimed = store.claim_action("browser", now=clock_value[0] + 1)
+        assert claimed is not None
+        store.set_directory_registry(
+            _telegram_registry(
+                5,
+                [
+                    {"cid": "0", "parentCid": None, "name": "根目录", "path": "/", "depth": 0},
+                    {"cid": "9", "parentCid": "0", "name": "动画", "path": "/动画", "depth": 1},
+                ],
+            )
+        )
+        store.append_action_event(
+            action.action_id,
+            lease_id=claimed.lease_id or "",
+            event_id="directory-applied",
+            state="applied",
+            result={"revision": 5},
+            now=clock_value[0] + 2,
+        )
+        assert asyncio.run(service.notify_status_once()) == 1
+        assert "115 目录已同步" in transport.edits[-1][2]
+        assert "动画" in transport.edits[-1][2]
+        assert asyncio.run(service.notify_status_once()) == 0
+    finally:
+        store.close()
+
+    timeout_clock = [1700000100.0]
+    timeout_store = QueueStore(":memory:")
+    timeout_transport = FakeTransport()
+    timeout_service = TelegramService(
+        timeout_store,
+        FakeProvider(),
+        timeout_transport,
+        allowed_chat_ids={11},
+        allowed_user_ids={22},
+        clock=lambda: timeout_clock[0],
+    )
+    try:
+        requested = asyncio.run(
+            timeout_service.handle_update({"message": _message("/dir", message_id=88)})
+        )
+        timeout_clock[0] += 61
+        assert asyncio.run(timeout_service.notify_status_once()) == 1
+        assert "Chrome 扩展未响应" in timeout_transport.edits[-1][2]
+        assert timeout_store.get_action(requested["actionId"]).status == "failed"
+    finally:
+        timeout_store.close()
