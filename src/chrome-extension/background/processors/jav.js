@@ -6,6 +6,8 @@
 	const intentApi = global.Push115.DownloadIntent
 	const { getItemName, getItemId, isFolder } = processors.Helpers
 	const foldersApi = global.Push115.Background.Folders
+	const RENAME_RETRY_ATTEMPTS = 3
+	const RENAME_RETRY_BACKOFF_MS = 300
 
 	function normalizeCompareCode(value) {
 		return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
@@ -37,6 +39,15 @@
 			size: /^\d+$/.test(size) ? Number(size) : 0,
 			hash: String(task?.expectedHash || metadata.expectedHash || metadata.ed2kHash || '').trim().toLowerCase(),
 		}
+	}
+
+	function isSouthPlusFlat(task) {
+		const source = String(task?.sourceSite || task?.source || '').trim().toLowerCase()
+		let linkType = String(task?.linkType || task?.metadata?.linkType || '').trim().toLowerCase()
+		if (!linkType) {
+			try { linkType = String(intentApi.parseDownloadLink?.(task?.url || task?.magnet)?.linkType || '').trim().toLowerCase() } catch (error) { /* legacy task */ }
+		}
+		return source === 'southplus' && linkType === 'ed2k'
 	}
 
 	function directFileMatches(item, task) {
@@ -98,13 +109,46 @@
 		return { listing, item }
 	}
 
+	async function renameWithRetry(cid, fid, name, task) {
+		let lastError
+		for (let attempt = 1; attempt <= RENAME_RETRY_ATTEMPTS; attempt += 1) {
+			try {
+				const result = await filesApi.rename(fid, name)
+				if (filesApi.operationSucceeded(result)) return result
+				lastError = new Error('115 拒绝重命名 JAV 单文件')
+			} catch (error) {
+				lastError = error
+			}
+			if (attempt < RENAME_RETRY_ATTEMPTS) {
+				await new Promise(resolve => setTimeout(resolve, RENAME_RETRY_BACKOFF_MS * attempt))
+			}
+		}
+		throw lastError || new Error('115 拒绝重命名 JAV 单文件')
+	}
+
+	async function removeEmptySouthPlusFolder(sourceCid, parentCid, appendLog) {
+		if (!sourceCid || !parentCid || sourceCid === parentCid || typeof foldersApi?.child !== 'function') return false
+		if (!await foldersApi.child(parentCid, sourceCid)) return false
+		const listing = await readValidatedFolder(sourceCid)
+		if ((Array.isArray(listing?.items) ? listing.items : []).length !== 0) return false
+		const removed = await filesApi.remove(sourceCid)
+		if (!filesApi.operationSucceeded(removed)) throw new Error('115 拒绝清理空的 South Plus 任务目录')
+		if (await foldersApi.child(parentCid, sourceCid)) throw new Error('空的 South Plus 任务目录回收尚未确认')
+		appendLog?.('已清理空的 South Plus 任务目录')
+		return true
+	}
+
 	async function processDirect(context) {
 		const { task, targetCid, config, appendLog, checkpoint = () => {} } = context
 		const plan = task.directPlan && typeof task.directPlan === 'object' ? task.directPlan : {}
+		const flatSouthPlus = isSouthPlusFlat(task)
 		const fid = String(task.directFileId || task.directFid || plan.fid || getItemId(context.targetFile) || '').trim()
 		if (!fid) throw new Error('缺少明确的单文件 FID')
-		const sourceCid = String(plan.sourceCid || task.directFileCid || targetCid || '').trim()
-		let currentCid = String(plan.currentCid || (plan.moved && plan.destinationCid) || sourceCid).trim()
+		const sourceCid = String((flatSouthPlus ? task.directFileCid || plan.currentCid || plan.sourceCid : plan.sourceCid || task.directFileCid)
+			|| targetCid || '').trim()
+		let currentCid = String((flatSouthPlus ? task.directFileCid || plan.currentCid || (plan.moved && plan.destinationCid) : plan.currentCid || (plan.moved && plan.destinationCid))
+			|| sourceCid).trim()
+		const initialCurrentCid = currentCid
 		let verified
 		try {
 			verified = await verifyFile(currentCid, fid, task)
@@ -129,22 +173,23 @@
 		const extension = rulesApi.getExtension(getItemName(item))
 		const targetName = `${code}${extension}`
 		const existingPlan = {
+			...plan,
 			version: 1,
 			fid,
 			sourceCid,
 			currentCid,
-			destinationCid: String(plan.destinationCid || '').trim(),
-			originalName: getItemName(item),
+			destinationCid: flatSouthPlus ? String(targetCid).trim() : String(plan.destinationCid || '').trim(),
+			originalName: String(plan.originalName || getItemName(item)).trim(),
 			targetName,
 			code,
 			moved: Boolean(plan.moved),
 			renamed: Boolean(plan.renamed),
 			finished: false,
 		}
-		task.directPlan = { ...existingPlan, ...plan, fid, sourceCid, currentCid, targetName, code }
+		task.directPlan = { ...existingPlan, fid, sourceCid, currentCid, targetName, code }
 		await checkpoint()
 
-		let destinationCid = String(task.directPlan.destinationCid || '').trim()
+		let destinationCid = flatSouthPlus ? String(targetCid).trim() : String(task.directPlan.destinationCid || '').trim()
 		if (!destinationCid) {
 			const parent = await readValidatedFolder(targetCid)
 			const destination = exactFolder(parent.items, code)
@@ -183,8 +228,7 @@
 			const destination = await readValidatedFolder(destinationCid)
 			const collision = findNameCollision(destination?.items, fid, [targetName])
 			if (collision) throw new Error(`JAV 目标文件名冲突：${targetName}`)
-			const renamed = await filesApi.rename(fid, targetName)
-			if (!filesApi.operationSucceeded(renamed)) throw new Error('115 拒绝重命名 JAV 单文件')
+			const renamed = await renameWithRetry(destinationCid, fid, targetName, task)
 			const afterRename = await verifyFile(destinationCid, fid, task)
 			item = afterRename.item
 			task.directPlan.renamed = true
@@ -193,11 +237,12 @@
 
 		const final = await verifyFile(destinationCid, fid, task)
 		if (getItemName(final.item) !== targetName) throw new Error('JAV 单文件重命名复核失败')
+		if (flatSouthPlus) await removeEmptySouthPlusFolder(initialCurrentCid, destinationCid, appendLog)
 		task.directPlan.currentCid = destinationCid
 		task.directPlan.finished = true
 		await checkpoint()
 		const messages = []
-		if (task.directPlan.moved) messages.push(`单文件 → ${code}`)
+		if (task.directPlan.moved) messages.push(flatSouthPlus ? `单文件平铺 → ${code}` : `单文件 → ${code}`)
 		if (task.directPlan.renamed) messages.push(`主视频 → ${targetName}`)
 		appendLog(task, `按 ${code} 完成单文件整理`)
 		return messages

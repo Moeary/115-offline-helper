@@ -74,11 +74,20 @@
 		return String(task?.file_id || task?.fileId || task?.dir_id || task?.dirId || task?.cid || '').trim()
 	}
 
+	function taskLinkType(task) {
+		const explicit = String(task?.linkType || task?.metadata?.linkType || '').trim().toLowerCase()
+		if (explicit) return explicit
+		try {
+			return String(global.Push115.DownloadIntent.parseDownloadLink?.(task?.url || task?.magnet)?.linkType || '').trim().toLowerCase()
+		} catch (error) {
+			return ''
+		}
+	}
+
 	function isSouthPlusDirectEd2k(task, profile) {
 		if (profile !== 'jav') return false
 		const source = String(task?.sourceSite || task?.source || '').trim().toLowerCase()
-		const linkType = String(task?.linkType || task?.metadata?.linkType || '').trim().toLowerCase()
-		return source === 'southplus' && linkType === 'ed2k'
+		return source === 'southplus' && taskLinkType(task) === 'ed2k'
 	}
 
 	function remoteTaskSize(task) {
@@ -397,10 +406,46 @@
 		}
 	}
 
+	function southPlusFolderNames(task, remoteTask) {
+		const expected = expectedValues(task)
+		const values = [
+			task?.metadata?.pageCode,
+			task?.code,
+			remoteTask?.name,
+			task?.remoteName,
+			expected.name,
+		]
+		const names = new Set()
+		for (const value of values) {
+			const code = global.Push115.DownloadIntent.normalizeCode(value)
+			if (code) names.add(code)
+		}
+		return names
+	}
+
+	function isSouthPlusFolder(item, names) {
+		if (!processors.Helpers.isFolder(item)) return false
+		const name = global.Push115.DownloadIntent.normalizeCode(processors.Helpers.getItemName(item))
+		return Boolean(name && names.has(name))
+	}
+
 	function snapshotIds(task) {
 		const snapshot = task?.beforeSnapshot || task?.preSubmitSnapshot || task?.metadata?.beforeSnapshot
 		const items = Array.isArray(snapshot?.items) ? snapshot.items : Array.isArray(snapshot?.files) ? snapshot.files : []
 		return new Set(items.map(item => String(item?.fid ?? item?.file_id ?? item?.fileId ?? '').trim()).filter(Boolean))
+	}
+
+	function snapshotEntryIds(task) {
+		const snapshot = task?.beforeSnapshot || task?.preSubmitSnapshot || task?.metadata?.beforeSnapshot
+		const items = Array.isArray(snapshot?.items) ? snapshot.items : Array.isArray(snapshot?.files) ? snapshot.files : []
+		const ids = new Set()
+		for (const item of items) {
+			for (const value of [item?.fid, item?.file_id, item?.fileId, item?.cid, item?.dir_id, item?.dirId, item?.id]) {
+				const id = String(value || '').trim()
+				if (id) ids.add(id)
+			}
+		}
+		return ids
 	}
 
 	function directReference(task) {
@@ -465,6 +510,7 @@
 	async function resolveDirectFile(task, remoteTask) {
 		const targetCid = String(task?.savePathCid || '').trim()
 		if (!targetCid) return null
+		const profile = normalizeProcessorProfile(task?.processorProfile, task?.mediaType === 'anime' ? 'anime' : task?.code ? 'jav' : 'generic')
 		const snapshot = task?.beforeSnapshot || task?.preSubmitSnapshot || task?.metadata?.beforeSnapshot
 		if (snapshot && String(snapshot.cid || '').trim() && String(snapshot.cid).trim() !== targetCid) {
 			throw new Error('提交前目录快照与任务保存目录不一致，保留文件等待复核')
@@ -472,11 +518,13 @@
 		const remoteFid = getRemoteTaskFileId(remoteTask)
 		const persistedFid = String(task?.directFileId || task?.directFid || task?.directPlan?.fid || '').trim()
 		const fid = persistedFid || remoteFid
+		const remoteFolderCid = getRemoteTaskFolderCid(remoteTask)
 		const knownCids = [...new Set([
 			String(task?.directPlan?.currentCid || '').trim(),
 			String(task?.directPlan?.destinationCid || '').trim(),
 			String(task?.directPlan?.sourceCid || '').trim(),
 			String(task?.directFileCid || '').trim(),
+			remoteFolderCid,
 			targetCid,
 		].filter(Boolean))]
 		let files = []
@@ -511,14 +559,16 @@
 		files = items.filter(item => item?.sha)
 		const expected = expectedValues(task)
 		if (!expected.name && expected.size <= 0 && !expected.hash) return null
-		if (!snapshot || (!Array.isArray(snapshot.items) && !Array.isArray(snapshot.files))) return null
+		const hasSnapshot = Boolean(snapshot && (Array.isArray(snapshot.items) || Array.isArray(snapshot.files)))
 		const before = snapshotIds(task)
+		const beforeEntries = snapshotEntryIds(task)
 		const occupied = new Set()
 		for (const other of await store.read()) {
 			if (!other || other.taskId === task.taskId) continue
 			const otherFid = String(other.directFileId || other.directFid || other.directPlan?.fid || '').trim()
 			if (otherFid) occupied.add(otherFid)
 		}
+		if (hasSnapshot) {
 		files = files.filter(item => !before.has(itemId(item)) && !occupied.has(itemId(item))
 			&& metadataMatches(item, task, { requireExpected: true }))
 		if (files.length === 1) {
@@ -532,6 +582,49 @@
 			return { cid: targetCid, fid: itemId(found), item: found, direct: true }
 		}
 		if (files.length > 1) throw new Error('无法唯一确认下载完成的文件，保留文件等待重试')
+		}
+		if (!isSouthPlusDirectEd2k(task, profile)) return null
+		// 115 may materialize a single ED2K download in a new folder named after
+		// the extracted code. South Plus wants that one video flattened back into
+		// the configured save directory, but the folder must be identified by an
+		// explicit remote CID or an exact code match under that directory. Never
+		// scan unrelated descendants or fall back to the library root.
+		const explicitFolderCids = [...new Set([
+			remoteFolderCid,
+			String(task?.remoteFolderCid || '').trim(),
+			String(task?.directPlan?.sourceCid || '').trim(),
+			String(task?.directFileCid || '').trim(),
+		].filter(cid => cid && cid !== targetCid))]
+		const folderNames = southPlusFolderNames(task, remoteTask)
+		const nestedFolderCids = [...explicitFolderCids]
+		for (const item of items.filter(value => isSouthPlusFolder(value, folderNames))) {
+			const cid = String(item?.cid || item?.fid || item?.file_id || '').trim()
+			if (cid && !beforeEntries.has(cid) && !nestedFolderCids.includes(cid)) nestedFolderCids.push(cid)
+		}
+		const nestedFid = persistedFid || (remoteFid && !explicitFolderCids.includes(remoteFid) ? remoteFid : '')
+		for (const cid of nestedFolderCids) {
+			let nested
+			try {
+				nested = await readFolder(cid)
+			} catch (error) {
+				continue
+			}
+			const nestedFiles = (Array.isArray(nested?.items) ? nested.items : []).filter(item => item?.sha
+				&& (!nestedFid || itemId(item) === nestedFid)
+				&& (!hasSnapshot || !before.has(itemId(item)))
+				&& !occupied.has(itemId(item))
+				&& metadataMatches(item, task, { requireExpected: true }))
+			if (nestedFiles.length > 1) throw new Error('无法唯一确认下载完成的文件，保留任务等待重试')
+			if (nestedFiles.length !== 1) continue
+			const found = nestedFiles[0]
+			const expectationKey = directExpectationKey(task)
+			if (expectationKey) {
+				const ambiguous = (await store.read()).some(other => other && other.taskId !== task.taskId
+					&& store.taskIsActive(other) && !directReference(other) && directExpectationKey(other) === expectationKey)
+				if (ambiguous) throw new Error('存在相同预期任务，无法唯一确认下载完成的文件，保留任务等待重试')
+			}
+			return { cid, fid: itemId(found), item: found, direct: true }
+		}
 		return null
 	}
 

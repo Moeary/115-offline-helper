@@ -12,7 +12,7 @@ function environment(saved = {}, disk = null) {
 	let serial = 100
 	let runtimeMessageListener = null
 	const calls = { move: [], remove: [], create: [], rename: [], offline: [] }
-	const faults = { remove: false, move: false, fallback: '', state: true, pageSize: 500 }
+	const faults = { remove: false, move: false, rename: 0, fallback: '', state: true, pageSize: 500 }
 	function folder(parent, name, id = String(serial++)) {
 		tree.set(id, { name, parent, items: [] })
 		tree.get(parent).items.push({ cid: id, pid: parent, n: name })
@@ -36,6 +36,7 @@ function environment(saved = {}, disk = null) {
 		async createFolder(parent, name) { calls.create.push({ parent, name }); return { state: true, cid: folder(parent, name) } },
 		async rename(fid, name) {
 			calls.rename.push({ fid: String(fid), name })
+			if (faults.rename > 0) { faults.rename -= 1; return { state: false } }
 			const node = tree.get(String(fid))
 			if (node) {
 				const parent = tree.get(node.parent)
@@ -515,9 +516,52 @@ test('South Plus ED2K accepts a normalized 115 filename while retaining the extr
 	await e.bg.TaskMonitor.processTask(task)
 	assert.equal(task.status, 'completed')
 	assert.equal(task.code, 'SSIS-561')
-	const destination = e.tree.get([...e.tree.keys()].find(cid => cid !== targetCid && e.tree.get(cid).name === 'SSIS-561'))
-	assert.ok(destination)
-	assert.equal(destination.items.find(item => item.fid === fresh.fid)?.n, 'SSIS-561.mp4')
+	assert.equal(e.calls.create.length, 0)
+	assert.equal(e.calls.move.length, 0)
+	assert.equal(e.tree.get(targetCid).items.find(item => item.fid === fresh.fid)?.n, 'SSIS-561.mp4')
+	assert.equal([...e.tree.values()].some(node => node.name === 'SSIS-561'), false)
+})
+
+test('South Plus ED2K flattens an exact task folder and removes it after the file moves', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const targetCid = '10'
+	const sourceCid = e.folder(targetCid, 'SNOS-377', '20')
+	const fresh = e.file(sourceCid, 'www.98T.la@SNOS-377.restored_prob4.mp4', 'southplus-nested-file')
+	fresh.s = 123
+	const task = {
+		taskId: 'southplus-nested', status: 'waiting', sourceSite: 'southplus', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k', code: 'SNOS-377',
+		remoteId: 'southplus-nested-remote', savePathCid: targetCid, expectedName: fresh.n, expectedSize: fresh.s,
+		beforeSnapshot: { cid: targetCid, items: [] }, metadata: { pageCode: 'SNOS-377', linkType: 'ed2k' }, createdAt: Date.now(),
+	}
+	e.context.remoteTasks = [{ info_hash: task.remoteId, name: task.expectedName, file_id: sourceCid, status: 2 }]
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.deepEqual(e.calls.move, [fresh.fid])
+	assert.deepEqual(e.calls.remove, [sourceCid])
+	assert.equal(e.tree.get(targetCid).items.find(item => item.fid === fresh.fid)?.n, 'SNOS-377.mp4')
+	assert.equal(e.tree.has(sourceCid), false)
+})
+
+test('South Plus ED2K retries a transient rename rejection after flattening', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	e.faults.rename = 1
+	const targetCid = '10'
+	const sourceCid = e.folder(targetCid, 'SNOS-131', '21')
+	const fresh = e.file(sourceCid, 'SNOS-131 restored.mp4', 'southplus-rename-retry')
+	fresh.s = 123
+	const task = {
+		taskId: 'southplus-rename-retry', status: 'waiting', sourceSite: 'southplus', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k', code: 'SNOS-131',
+		remoteId: 'southplus-rename-remote', savePathCid: targetCid, expectedName: fresh.n, expectedSize: fresh.s,
+		beforeSnapshot: { cid: targetCid, items: [] }, metadata: { pageCode: 'SNOS-131', linkType: 'ed2k' }, createdAt: Date.now(),
+	}
+	e.context.remoteTasks = [{ info_hash: task.remoteId, name: task.expectedName, file_id: sourceCid, status: 2 }]
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.equal(e.calls.rename.length, 2)
+	assert.equal(e.tree.get(targetCid).items.find(item => item.fid === fresh.fid)?.n, 'SNOS-131.mp4')
+	assert.equal(e.tree.has(sourceCid), false)
 })
 
 test('South Plus ED2K waits for a unique file instead of falling back to a task-directory scan', async () => {
