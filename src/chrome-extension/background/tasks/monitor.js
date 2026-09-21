@@ -158,7 +158,7 @@
 		return chrome.storage.local.get([
 			'push115_auto_delete_small', 'push115_delete_size_threshold', 'push115_auto_organize',
 			'push115_junk_extensions', 'push115_preserve_extensions', 'push115_clean_extensions',
-			'push115_clean_images', 'push115_clean_nfo',
+			'push115_clean_images', 'push115_clean_nfo', STORAGE_KEYS.SITE_PROFILES || 'push115_site_profiles',
 		])
 	}
 
@@ -170,11 +170,27 @@
 		return ['generic', 'anime'].includes(profile) && config.push115_auto_delete_small === true
 	}
 
+	function notificationIconUrl() {
+		try {
+			if (typeof chrome.runtime?.getURL === 'function') return chrome.runtime.getURL('icons/icon48.png')
+		} catch (error) {
+			// Fall back to the extension-relative URL for test doubles and old Chrome.
+		}
+		return 'icons/icon48.png'
+	}
+
 	function notifyTask(task, title, message) {
 		if (!chrome.notifications?.create) return
-		chrome.notifications.create(`push115-${task.taskId}-${Date.now()}`, {
-			type: 'basic', iconUrl: 'icons/icon48.png', title, message,
-		})
+		try {
+			const result = chrome.notifications.create(`push115-${task.taskId}-${Date.now()}`, {
+				type: 'basic', iconUrl: notificationIconUrl(), title, message,
+			})
+			void Promise.resolve(result).catch(error => {
+				console.warn('[BG] 通知创建失败:', error?.message || error)
+			})
+		} catch (error) {
+			console.warn('[BG] 通知创建失败:', error?.message || error)
+		}
 	}
 
 	async function completeDirectFile(task, direct, config, profile) {

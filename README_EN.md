@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-<img src="https://img.shields.io/badge/version-1.17.2-orange" alt="Version">
+<img src="https://img.shields.io/badge/version-1.18.1-orange" alt="Version">
 </p>
 
 ---
@@ -60,6 +60,8 @@ Nyaa, Sukebei and Mikan share one confirmation dialog and one rate-limited queue
 | `anime` | Keeps torrent names and directory semantics; batch/Mikan archive moves identified video/subtitle files into the chosen destination | No JAV rename and no guessed show/episode names |
 
 Subtitle extensions are protected by default, image/NFO cleanup is opt-in, and every remote move/rename/recycle is verified with explicit CID/FID values. Unknown files, collisions and inconsistent directory responses stay in place for a later retry.
+
+Small-video threshold cleanup is controlled by both the global auto-cleanup switch and each site's “Small-video cleanup” option. JavBus and South Plus (AV processors) are enabled by default; Anime sites such as Mikan and Nyaa will not delete videos merely because they are below 100 MB. Explicit junk-extension rules still follow the global settings.
 
 South Plus ED2K tasks persist the original filename, size and hash from the link together with a pre-submit directory snapshot. After the download finishes, the `jav` profile acts on one explicit FID only when exactly one new file matches (`CODE.ext` when that file is the main video); the single-file path never scans or moves other files in the directory. Ambiguous matches, identity mismatches or directory read failures keep the file in place for a later verification instead of scanning the root or other tasks.
 

@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-  <img src="https://img.shields.io/badge/version-1.17.2-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-1.18.1-orange" alt="Version">
 </p>
 
 ---
@@ -64,6 +64,8 @@ Mikan 当前支持 `mikan.congvps.icu`、`mikanani.me`、`mikanime.tv` 和镜像
 | `anime` | 保留 torrent 的原始文件名和目录语义；批量或 Mikan 归档时，把明确的视频/字幕归到选定目录 | 不套用 JAV 重命名，不猜番名和集数 |
 
 清理仍遵循保守原则：字幕扩展名默认保护，图片/NFO 清理默认关闭；移动、改名、回收目录前都以明确的 CID/FID 复核。遇到同名冲突、未知文件或目录状态不一致时保留源文件，等待后续重试。
+
+小视频阈值清理由全局“自动清理”开关和各站点规则卡片中的“启用小视频阈值清理”共同控制。默认仅 JavBus 与 South Plus（AV 处理）启用，Mikan、Nyaa 等 Anime 站点不会因文件小于 100 MB 而删除视频；明确垃圾扩展名规则仍按全局设置执行。
 
 South Plus 的 ED2K 任务会把链接中的原始文件名、大小和哈希连同提交前目录快照保存下来。下载完成后，只有在目标目录中找到唯一匹配的新文件时，`jav` profile 才会按明确的 FID 移动并整理这一文件（主视频目标名为 `番号.ext`）；单文件路径只处理这个 FID，不连带扫描或移动目录内其他文件。匹配不唯一、校验不符或目录读取失败时保留文件并等待后续复核，不扫描根目录或其他任务。
 

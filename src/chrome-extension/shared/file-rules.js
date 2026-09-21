@@ -122,10 +122,17 @@
     if (config.cleanImages === true) IMAGE_EXTENSIONS.forEach(extension => cleanExtensions.add(extension));
     if (config.cleanNfo === true) cleanExtensions.add('.nfo');
 
+    const smallVideoCleanup = getConfiguredValue(
+      config,
+      ['smallVideoCleanup', 'smallVideoCleanupEnabled'],
+      true,
+    ) === true;
+
     return {
       junkExtensions,
       preserveExtensions,
       cleanExtensions,
+      smallVideoCleanup,
     };
   }
 
@@ -256,6 +263,10 @@
         return remove('configured-clean-extension', { extension, sizeBytes });
       }
       return keep('unknown-file-type', { extension, sizeBytes });
+    }
+
+    if (rules.smallVideoCleanup !== true) {
+      return keep('small-video-filter-disabled', { extension, sizeBytes, keywordScore });
     }
 
     if (!thresholdBytes || !sizeBytes || sizeBytes >= thresholdBytes) {

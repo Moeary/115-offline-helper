@@ -24,6 +24,7 @@
 			cleanExtensions: config.push115_clean_extensions,
 			cleanImages: config.push115_clean_images === true,
 			cleanNfo: config.push115_clean_nfo === true,
+			smallVideoCleanup: config.push115_small_video_cleanup,
 		})
 	}
 

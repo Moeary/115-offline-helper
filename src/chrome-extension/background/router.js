@@ -4,9 +4,38 @@
 	const { STORAGE_KEYS } = global.Push115.Config
 	const submissions = new Map()
 	let submissionGeneration = 0
+	const DUPLICATE_TASK_MESSAGE = /任务已存在|重复的链接|duplicate task|already exists/i
+	const STALE_ANIME_TARGET_MESSAGE = /本番目录已在其他窗口修改|请重新打开确认窗口/
 
 	function assertSubmissionGeneration(generation) {
 		if (generation !== submissionGeneration) throw new Error('本地任务状态已完全重置，请重新提交')
+	}
+
+	function isDuplicateSubmissionError(error) {
+		if (error?.duplicate === true) return true
+		if (typeof background.OfflineApi?.isDuplicateTaskError === 'function'
+			&& background.OfflineApi.isDuplicateTaskError(error)) return true
+		return DUPLICATE_TASK_MESSAGE.test(String(error?.message || error || ''))
+	}
+
+	function isExpectedFlowError(action, error) {
+		return isDuplicateSubmissionError(error)
+			|| (action === 'PREPARE_ANIME_SERIES' && STALE_ANIME_TARGET_MESSAGE.test(String(error?.message || error || '')))
+	}
+
+	async function findLocalDuplicateTask(intent) {
+		if (!background.TaskStore?.read || !global.Push115.DownloadIntent?.dedupeKey) return null
+		try {
+			const key = global.Push115.DownloadIntent.dedupeKey(intent.url)
+			const tasks = await background.TaskStore.read()
+			return tasks.find(task => {
+				const url = task.url || task.magnet
+				return task.status !== 'failed' && url
+					&& global.Push115.DownloadIntent.dedupeKey(url) === key
+			}) || null
+		} catch (error) {
+			return null
+		}
 	}
 
 	function submissionJobId(result, intent) {
@@ -87,7 +116,20 @@
 		}
 		const beforeSnapshot = await captureBeforeSnapshot(intent)
 		assertSubmissionGeneration(generation)
-		const result = await background.OfflineApi.addTask(intent.url, intent.savePathCid)
+		let result
+		try {
+			result = await background.OfflineApi.addTask(intent.url, intent.savePathCid)
+		} catch (error) {
+			if (!isDuplicateSubmissionError(error)) throw error
+			assertSubmissionGeneration(generation)
+			const task = await findLocalDuplicateTask(intent)
+			assertSubmissionGeneration(generation)
+			return {
+				duplicate: true,
+				...(task ? { task } : {}),
+				message: error?.message || '115 已存在相同的离线任务',
+			}
+		}
 		assertSubmissionGeneration(generation)
 		const jobId = submissionJobId(result, intent)
 		const config = await chrome.storage.local.get([
@@ -138,12 +180,28 @@
 		}
 	}
 
+	function notificationIconUrl() {
+		try {
+			if (typeof chrome.runtime?.getURL === 'function') return chrome.runtime.getURL('icons/icon48.png')
+		} catch (error) {
+			// Fall back to the extension-relative URL for test doubles and old Chrome.
+		}
+		return 'icons/icon48.png'
+	}
+
 	function notify(details = {}) {
 		if (!chrome.notifications?.create) return
-		chrome.notifications.create({
-			type: 'basic', iconUrl: 'icons/icon48.png',
-			title: details.title || '115 Offline Helper', message: details.message || '',
-		})
+		try {
+			const result = chrome.notifications.create({
+				type: 'basic', iconUrl: notificationIconUrl(),
+				title: details.title || '115 Offline Helper', message: details.message || '',
+			})
+			void Promise.resolve(result).catch(error => {
+				console.warn('[BG] 通知创建失败:', error?.message || error)
+			})
+		} catch (error) {
+			console.warn('[BG] 通知创建失败:', error?.message || error)
+		}
 	}
 
 	function listen() {
@@ -221,12 +279,16 @@
 			work.then(response => {
 				if (response) sendResponse(response)
 			}).catch(error => {
-				console.error(`[BG] ${action || 'UNKNOWN'} failed:`, error)
+				if (isExpectedFlowError(action, error)) console.info(`[BG] ${action || 'UNKNOWN'} rejected:`, error)
+				else console.error(`[BG] ${action || 'UNKNOWN'} failed:`, error)
 				sendResponse({ success: false, error: error?.message || String(error) })
 			})
 			return true
 		})
 	}
 
-	background.Router = { listen, submitIntent, recordIntents }
+	background.Router = {
+		listen, submitIntent, recordIntents,
+		isDuplicateSubmissionError, isExpectedFlowError, notificationIconUrl,
+	}
 })(globalThis)

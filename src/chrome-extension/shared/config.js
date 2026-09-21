@@ -101,8 +101,8 @@
 	})
 
 	const DEFAULT_SITE_PROFILES = Object.freeze({
-		generic: Object.freeze({ enabled: false, defaultSavePathCid: '0', defaultProcessorProfile: 'generic', inlineSendButton: true }),
-		javbus: Object.freeze({ enabled: true, defaultSavePathCid: '0', defaultProcessorProfile: 'jav', inlineSendButton: true }),
+		generic: Object.freeze({ enabled: false, defaultSavePathCid: '0', defaultProcessorProfile: 'generic', inlineSendButton: true, smallVideoCleanup: false }),
+		javbus: Object.freeze({ enabled: true, defaultSavePathCid: '0', defaultProcessorProfile: 'jav', inlineSendButton: true, smallVideoCleanup: true }),
 		nyaa: Object.freeze({
 			enabled: true,
 			defaultSavePathCid: '0',
@@ -110,6 +110,7 @@
 			inlineSendButton: true,
 			batchSelection: true,
 			batchConcurrency: 2,
+			smallVideoCleanup: false,
 		}),
 		sukebei: Object.freeze({
 			enabled: true,
@@ -118,6 +119,7 @@
 			inlineSendButton: true,
 			batchSelection: true,
 			batchConcurrency: 2,
+			smallVideoCleanup: false,
 		}),
 		mikan: Object.freeze({
 			enabled: true,
@@ -126,6 +128,7 @@
 			inlineSendButton: true,
 			batchSelection: true,
 			batchConcurrency: 2,
+			smallVideoCleanup: false,
 		}),
 		southplus: Object.freeze({
 			enabled: true,
@@ -135,6 +138,7 @@
 			recordButton: true,
 			batchSelection: true,
 			batchConcurrency: 2,
+			smallVideoCleanup: true,
 		}),
 	})
 	const PROCESSOR_PROFILES = Object.freeze(['generic', 'jav', 'anime'])
@@ -214,6 +218,9 @@
 				const concurrency = Number(profile.batchConcurrency)
 				profile.batchConcurrency = Number.isFinite(concurrency) ? Math.min(BATCH_CONCURRENCY_MAX, Math.max(1, Math.round(concurrency))) : 2
 			}
+			profile.smallVideoCleanup = saved.smallVideoCleanup !== undefined
+				? saved.smallVideoCleanup === true
+				: defaults.smallVideoCleanup === true
 			// Read-only compatibility aliases keep 1.1.0 callers and stored tasks usable during upgrade.
 			profile.savePathCid = profile.defaultSavePathCid
 			profile.processorProfile = profile.defaultProcessorProfile

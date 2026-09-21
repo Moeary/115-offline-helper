@@ -31,6 +31,13 @@
 		return run
 	}
 
+	function isDuplicateTaskError(errorOrMessage) {
+		const message = typeof errorOrMessage === 'string'
+			? errorOrMessage
+			: errorOrMessage?.message || errorOrMessage?.error_msg || ''
+		return /任务已存在|重复的链接|duplicate task|already exists/i.test(String(message))
+	}
+
 	async function getTasks() {
 		const result = await requestQueue.enqueue(() => client.data({ url: 'https://115.com/web/lixian/?ct=lixian&ac=task_lists', method: 'GET' }))
 		if (result?.state) return result.tasks || result.data?.tasks || []
@@ -50,9 +57,11 @@
 				data: { url, uid, sign, time, wp_path_id: savePathCid, savepath: '' },
 			}))
 			if (result?.state === false) {
-				const error = new Error(result?.error_msg || '115 离线任务被远端拒绝')
+				const message = result?.error_msg || '115 离线任务被远端拒绝'
+				const error = new Error(message)
 				error.code = 'REMOTE_REJECTED'
 				error.remoteRejected = true
+				error.duplicate = isDuplicateTaskError(message)
 				throw error
 			}
 			if (!result?.state) throw new Error(result?.error_msg || '115 离线任务提交失败')
@@ -61,7 +70,7 @@
 	}
 
 	global.Push115.Background.OfflineApi = {
-		getTasks, addTask,
+		getTasks, addTask, isDuplicateTaskError,
 		requestPolicy: requestQueue.policy,
 		submissionPolicy: Object.freeze({ concurrency: 1, minIntervalMs: requestQueue.policy.minIntervalMs }),
 	}

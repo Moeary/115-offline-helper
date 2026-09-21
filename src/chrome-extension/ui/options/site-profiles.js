@@ -83,6 +83,7 @@
 				heading,
 				field(directoryLabel, cid),
 				field('默认处理规则', select('defaultProcessorProfile', processorOptions, profile.defaultProcessorProfile)),
+				checkboxField('启用小视频阈值清理 / Small-video cleanup', 'smallVideoCleanup', profile.smallVideoCleanup === true),
 				checkboxField(siteId === 'southplus' ? '显示资源列表中的“发送到115”按钮' : '显示行内“发送到115”', 'inlineSendButton', profile.inlineSendButton !== false),
 			)
 			if (siteId === 'southplus') card.append(
@@ -113,6 +114,7 @@
 				enabled: get('enabled').checked,
 				defaultSavePathCid: global.Push115.Config.normalizeCid(get('defaultSavePathCid').value, '0'),
 				defaultProcessorProfile: get('defaultProcessorProfile').value,
+				smallVideoCleanup: get('smallVideoCleanup').checked,
 				inlineSendButton: get('inlineSendButton').checked,
 			}
 			if (siteId === 'southplus') profiles[siteId].recordButton = get('recordButton').checked
