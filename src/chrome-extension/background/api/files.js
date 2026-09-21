@@ -80,7 +80,7 @@
 
 	async function rename(fid, newName) {
 		return requestQueue.enqueue(() => client.data({
-			url: 'https://webapi.115.com/files/edit', method: 'POST', data: { fid, name: newName },
+			url: 'https://webapi.115.com/files/edit', method: 'POST', data: { fid, file_name: newName },
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 		}))
 	}

@@ -522,6 +522,23 @@ test('South Plus ED2K accepts a normalized 115 filename while retaining the extr
 	assert.equal([...e.tree.values()].some(node => node.name === 'SSIS-561'), false)
 })
 
+test('South Plus ED2K resolves a completed file before its 115 task row disappears', async () => {
+	const e = environment()
+	e.data.push115_auto_organize = true
+	const targetCid = '10'
+	const fresh = e.file(targetCid, 'www.98T.la@MIDA-574.restored_prob4.mp4', 'southplus-missing-remote')
+	fresh.s = 123
+	const task = {
+		taskId: 'southplus-missing-remote', status: 'waiting', sourceSite: 'southplus', processorProfile: 'jav', mediaType: 'jav', linkType: 'ed2k', code: 'MIDA-574',
+		savePathCid: targetCid, expectedName: fresh.n, expectedSize: fresh.s,
+		beforeSnapshot: { cid: targetCid, items: [] }, metadata: { pageCode: 'MIDA-574', linkType: 'ed2k' }, createdAt: Date.now(),
+	}
+	e.context.remoteTasks = []
+	await e.bg.TaskMonitor.processTask(task)
+	assert.equal(task.status, 'completed')
+	assert.equal(e.tree.get(targetCid).items.find(item => item.fid === fresh.fid)?.n, 'MIDA-574.mp4')
+})
+
 test('South Plus ED2K flattens an exact task folder and removes it after the file moves', async () => {
 	const e = environment()
 	e.data.push115_auto_organize = true

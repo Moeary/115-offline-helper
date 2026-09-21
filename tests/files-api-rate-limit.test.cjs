@@ -9,6 +9,7 @@ const offlineSource = path.join(__dirname, '../src/chrome-extension/background/a
 
 test('115 file mutations are serialized and spaced', { timeout: 10000 }, async () => {
 	const starts = []
+	const requests = []
 	let active = 0
 	let maximumActive = 0
 	const context = vm.createContext({
@@ -20,7 +21,8 @@ test('115 file mutations are serialized and spaced', { timeout: 10000 }, async (
 		Push115: {
 			Background: {
 				Client: {
-					async data() {
+					async data(request) {
+						requests.push(request)
 						starts.push(Date.now())
 						active += 1
 						maximumActive = Math.max(maximumActive, active)
@@ -48,6 +50,9 @@ test('115 file mutations are serialized and spaced', { timeout: 10000 }, async (
 	}
 	assert.equal(api.mutationPolicy.concurrency, 1)
 	assert.equal(api.mutationPolicy.minIntervalMs, 500)
+	const renameRequest = requests.find(request => request.url.endsWith('/files/edit'))
+	assert.equal(renameRequest.data.fid, '1')
+	assert.equal(renameRequest.data.file_name, 'restored.mkv')
 
 	vm.runInContext(fs.readFileSync(offlineSource, 'utf8'), context, { filename: offlineSource })
 	const beforeSubmissions = starts.length

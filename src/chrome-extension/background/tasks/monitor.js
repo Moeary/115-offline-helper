@@ -260,7 +260,13 @@
 			await finishProcessing(task, task.animeTransfer.sourceCid, true, config, profile)
 			return
 		}
-		if (profile === 'jav' && task.directPlan) {
+		// A completed 115 task can disappear from task_lists before the monitor's
+		// next round, especially when many ED2K links are submitted together. For
+		// South Plus direct results, the validated save-root snapshot is a stronger
+		// local identity signal than waiting for a remote task row that may already
+		// be gone. Existing direct plans retain their explicit-FID resume path for
+		// all JAV sources; all mutations still require an explicit file identity.
+		if (profile === 'jav' && (task.directPlan || isSouthPlusDirectEd2k(task, profile))) {
 			if (!await taskStillActive(task)) return
 			const direct = await resolveDirectFile(task, null)
 			if (direct) {
@@ -282,7 +288,7 @@
 		const remoteTask = matchingRemoteTasks[0]
 		if (!remoteTask) {
 			task.status = 'waiting'
-			task.message = `等待 115 任务出现（第 ${task.attempts} 次检查）`
+			task.message = `等待 115 任务或明确下载文件出现（第 ${task.attempts} 次检查）`
 			task.updatedAt = Date.now()
 			if (task.attempts === 1 || task.attempts % 10 === 0) store.appendLog(task, task.message)
 			return

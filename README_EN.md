@@ -14,7 +14,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/manifest-v3-blue" alt="Manifest V3">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
-<img src="https://img.shields.io/badge/version-1.17.0-orange" alt="Version">
+<img src="https://img.shields.io/badge/version-1.17.2-orange" alt="Version">
 </p>
 
 ---
